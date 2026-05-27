@@ -132,7 +132,7 @@ app.get("/api/templates", async (req, res) => {
 
   try {
     const response = await fetch(
-      `https://graph.facebook.com/v19.0/${WABA_ID}/message_templates?status=APPROVED&limit=20`,
+      `https://graph.facebook.com/v19.0/${WABA_ID}/message_templates?status=APPROVED&limit=20&fields=name,language,category,status,components`,
       {
         headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
       }
@@ -140,12 +140,21 @@ app.get("/api/templates", async (req, res) => {
     const data = await response.json();
 
     if (data.data) {
-      const templates = data.data.map(t => ({
-        name: t.name,
-        language: t.language,
-        category: t.category,
-        status: t.status,
-      }));
+      const templates = data.data.map(t => {
+        // Extract body text and count variables like {{1}}
+        const bodyComp = t.components?.find(c => c.type === "BODY");
+        const bodyText = bodyComp?.text || "";
+        const varMatches = bodyText.match(/\{\{\d+\}\}/g) || [];
+        const varCount = varMatches.length;
+        return {
+          name: t.name,
+          language: t.language,
+          category: t.category,
+          status: t.status,
+          body: bodyText,
+          varCount,
+        };
+      });
       res.json({ templates });
     } else {
       res.status(400).json({ error: data.error?.message || "Failed to fetch templates" });
@@ -157,7 +166,7 @@ app.get("/api/templates", async (req, res) => {
 
 // ─── SEND A TEMPLATE MESSAGE (to initiate conversation) ───
 app.post("/api/send-template", async (req, res) => {
-  const { to, template_name, language_code } = req.body;
+  const { to, template_name, language_code, components } = req.body;
 
   console.log(`📤 Template send request → to: ${to}, template: ${template_name}`);
 
@@ -166,17 +175,24 @@ app.post("/api/send-template", async (req, res) => {
   }
 
   try {
+    const templateObj = {
+      name: template_name,
+      language: { code: language_code || "en" }
+    };
+
+    // Only add components if variables were provided
+    if (components && components.length > 0) {
+      templateObj.components = components;
+    }
+
     const payload = {
       messaging_product: "whatsapp",
       to,
       type: "template",
-      template: {
-        name: template_name,
-        language: { code: language_code || "en" }
-      }
+      template: templateObj
     };
 
-    console.log(`📡 Sending template via Meta API...`);
+    console.log(`📡 Sending template:`, JSON.stringify(payload));
 
     const response = await fetch(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
