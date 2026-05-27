@@ -465,7 +465,26 @@
       .modal-handle { display: none; }
     }
 
-    /* ── TOAST ── */
+    /* ── FOOTER ── */
+    .footer-bar {
+      background: var(--surface);
+      border-top: 1px solid var(--border);
+      padding: 7px 16px;
+      text-align: center;
+      font-size: 11px;
+      color: var(--text-dim);
+      flex-shrink: 0;
+      letter-spacing: 0.01em;
+    }
+
+    .footer-bar a {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+
+    .footer-bar a:hover { color: var(--green); }
     .toast {
       position: fixed;
       bottom: max(80px, calc(env(safe-area-inset-bottom) + 70px));
@@ -526,6 +545,10 @@
   </div>
 </div>
 
+<div class="footer-bar">
+  Developed by <a href="https://lynxtech.org" target="_blank" rel="noopener noreferrer">Lynx Tech</a>
+</div>
+
 <!-- MODAL -->
 <div class="modal-overlay" id="modalOverlay" onclick="closeModalOutside(event)">
   <div class="modal">
@@ -535,55 +558,35 @@
       <button class="modal-close" onclick="closeModal()">✕</button>
     </div>
 
-    <div class="tabs">
-      <button class="tab active" id="tab-template" onclick="switchTab('template')">Introduction</button>
-      <button class="tab" id="tab-custom" onclick="switchTab('custom')">Custom Template</button>
+    <div class="modal-note">
+      <strong>How this works:</strong> Select an approved template to send. Once your customer replies, you can chat freely with no restrictions.
     </div>
 
-    <!-- INTRO TAB -->
-    <div id="panel-template">
-      <div class="modal-note">
-        <strong>How this works:</strong> WhatsApp requires an approved template to start conversations. Once your customer replies, you can chat freely.
-      </div>
-      <div class="form-group">
-        <div class="form-label">Customer's WhatsApp Number</div>
-        <input class="form-input" type="tel" id="templatePhone" placeholder="923001234567 (no + sign)" />
-        <div class="form-hint">Country code + number, no spaces. Pakistan: 92xxxxxxxxxx</div>
-      </div>
-      <div class="form-group">
-        <div class="form-label">Message Preview</div>
-        <div class="template-preview">Assalam u Alaikum! 👋
-
-We're reaching out from *The Recovery House*, a project of *Caravan of Life Pakistan Trust* — a safe, supportive space dedicated to healing and recovery.
-
-This is our official WhatsApp number. We'll use it to share updates, event invitations, and stay connected with our community.
-
-Are you or someone you know seeking support, or would you like to learn about our upcoming programs?</div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn-cancel" onclick="closeModal()">Cancel</button>
-        <button class="btn-send" id="sendTemplateBtn" onclick="sendTemplate()">Send Introduction</button>
-      </div>
+    <div class="form-group">
+      <div class="form-label">Customer's WhatsApp Number</div>
+      <input class="form-input" type="tel" id="templatePhone" placeholder="923001234567 (no + sign)" />
+      <div class="form-hint">Country code + number, no spaces. Pakistan: 92xxxxxxxxxx</div>
     </div>
 
-    <!-- CUSTOM TAB — fetches approved templates automatically -->
-    <div id="panel-custom" style="display:none">
-      <div class="modal-note">Your approved templates are fetched automatically from Meta. Select one and enter the customer number.</div>
-      <div class="form-group">
-        <div class="form-label">Customer's WhatsApp Number</div>
-        <input class="form-input" type="tel" id="customPhone" placeholder="923001234567" />
-      </div>
-      <div class="form-group">
-        <div class="form-label">Select Template</div>
-        <select class="form-input" id="customTemplateName" style="cursor:pointer">
-          <option value="">Loading templates...</option>
-        </select>
-        <div class="form-hint" id="templateHint">Templates are fetched from your WhatsApp Manager</div>
-      </div>
-      <div class="modal-actions">
-        <button class="btn-cancel" onclick="closeModal()">Cancel</button>
-        <button class="btn-send" id="sendCustomBtn" onclick="sendCustomTemplate()">Send Template</button>
-      </div>
+    <div class="form-group">
+      <div class="form-label">Select Template</div>
+      <select class="form-input" id="templateSelect" style="cursor:pointer" onchange="onTemplateSelect()">
+        <option value="">Loading templates...</option>
+      </select>
+    </div>
+
+    <!-- Dynamic variable fields — shown only if template has {{1}} etc -->
+    <div id="variableFields"></div>
+
+    <!-- Template body preview -->
+    <div id="templatePreviewWrap" style="display:none">
+      <div class="form-label" style="margin-bottom:6px">Preview</div>
+      <div class="template-preview" id="templatePreviewText"></div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-send" id="sendTemplateBtn" onclick="sendTemplate()">Send</button>
     </div>
   </div>
 </div>
@@ -596,45 +599,105 @@ Are you or someone you know seeking support, or would you like to learn about ou
   let pollInterval = null;
   const isMobile = () => window.innerWidth < 640;
 
-  // ── TABS ──
-  function switchTab(tab) {
-    ['template','custom'].forEach(t => {
-      document.getElementById('tab-'+t).className = 'tab' + (t===tab?' active':'');
-      document.getElementById('panel-'+t).style.display = t===tab ? '' : 'none';
-    });
-    if (tab === 'custom') loadTemplates();
+  let loadedTemplates = [];
+
+  // ── MODAL ──
+  function openModal() {
+    document.getElementById('modalOverlay').classList.add('open');
+    loadTemplates();
   }
+  function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); }
+  function closeModalOutside(e) { if (e.target===document.getElementById('modalOverlay')) closeModal(); }
 
   // ── FETCH APPROVED TEMPLATES ──
   async function loadTemplates() {
-    const select = document.getElementById('customTemplateName');
-    const hint = document.getElementById('templateHint');
-    select.innerHTML = '<option value="">Fetching templates...</option>';
+    const select = document.getElementById('templateSelect');
+    select.innerHTML = '<option value="">Fetching your templates...</option>';
+    document.getElementById('variableFields').innerHTML = '';
+    document.getElementById('templatePreviewWrap').style.display = 'none';
     try {
       const res = await fetch('/api/templates');
       const data = await res.json();
       if (data.templates && data.templates.length > 0) {
-        select.innerHTML = data.templates.map(t =>
-          `<option value="${t.name}" data-lang="${t.language}">${t.name} (${t.language}) — ${t.category}</option>`
-        ).join('');
-        hint.textContent = `${data.templates.length} approved template(s) loaded`;
+        loadedTemplates = data.templates;
+        select.innerHTML = '<option value="">— Select a template —</option>' +
+          data.templates.map(t =>
+            `<option value="${t.name}">${t.name} (${t.language})</option>`
+          ).join('');
       } else if (data.error) {
-        select.innerHTML = '<option value="">Could not load — check WABA_ID in Render</option>';
-        hint.textContent = 'Error: ' + data.error;
+        select.innerHTML = `<option value="">Error: ${data.error}</option>`;
       } else {
         select.innerHTML = '<option value="">No approved templates found</option>';
-        hint.textContent = 'Submit and get a template approved in WhatsApp Manager first';
       }
     } catch(e) {
-      select.innerHTML = '<option value="">Network error</option>';
-      hint.textContent = e.message;
+      select.innerHTML = `<option value="">Network error</option>`;
     }
   }
 
-  // ── MODAL ──
-  function openModal() { document.getElementById('modalOverlay').classList.add('open'); }
-  function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); }
-  function closeModalOutside(e) { if (e.target===document.getElementById('modalOverlay')) closeModal(); }
+  // ── WHEN TEMPLATE SELECTED ──
+  function onTemplateSelect() {
+    const name = document.getElementById('templateSelect').value;
+    const tpl = loadedTemplates.find(t => t.name === name);
+    const previewWrap = document.getElementById('templatePreviewWrap');
+    const varFields = document.getElementById('variableFields');
+    varFields.innerHTML = '';
+    if (!tpl) { previewWrap.style.display = 'none'; return; }
+    previewWrap.style.display = '';
+    document.getElementById('templatePreviewText').textContent = tpl.body || '(no preview available)';
+    if (tpl.varCount > 0) {
+      let html = '';
+      for (let i = 1; i <= tpl.varCount; i++) {
+        html += `<div class="form-group" style="margin-top:10px">
+          <div class="form-label">Variable {{${i}}} value</div>
+          <input class="form-input" type="text" id="var_${i}" placeholder="e.g. Ahmad" />
+        </div>`;
+      }
+      varFields.innerHTML = html;
+    }
+  }
+
+  // ── SEND TEMPLATE ──
+  async function sendTemplate() {
+    const phone = document.getElementById('templatePhone').value.trim().replace(/\D/g,'');
+    const select = document.getElementById('templateSelect');
+    const templateName = select.value;
+    const tpl = loadedTemplates.find(t => t.name === templateName);
+    if (!phone) { showToast('Enter a phone number', 'error'); return; }
+    if (!templateName || !tpl) { showToast('Select a template', 'error'); return; }
+    let components = [];
+    if (tpl.varCount > 0) {
+      const params = [];
+      for (let i = 1; i <= tpl.varCount; i++) {
+        const val = document.getElementById('var_' + i)?.value?.trim();
+        if (!val) { showToast(`Fill in variable {{${i}}}`, 'error'); return; }
+        params.push({ type: 'text', text: val });
+      }
+      components = [{ type: 'body', parameters: params }];
+    }
+    const btn = document.getElementById('sendTemplateBtn');
+    btn.disabled = true; btn.textContent = 'Sending...';
+    try {
+      const res = await fetch('/api/send-template', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: phone, template_name: templateName, language_code: tpl.language, components })
+      });
+      const data = await res.json();
+      if (data.success) {
+        showToast('Sent ✓', 'success');
+        closeModal();
+        await loadConversations();
+        openConversation(phone, phone);
+      } else {
+        showToast('Error: ' + (data.error || 'Failed'), 'error');
+        console.error('Template error:', data);
+      }
+    } catch(e) {
+      showToast('Network error: ' + e.message, 'error');
+    } finally {
+      btn.disabled = false; btn.textContent = 'Send';
+    }
+  }
 
   // ── BACK BUTTON (mobile) ──
   function goBack() {
@@ -759,65 +822,6 @@ Are you or someone you know seeking support, or would you like to learn about ou
       showToast('Network error', 'error');
     } finally {
       btn.disabled = false;
-    }
-  }
-
-  // ── SEND INTRO TEMPLATE ──
-  async function sendTemplate() {
-    const phone = document.getElementById('templatePhone').value.trim().replace(/\D/g,'');
-    if (!phone) { showToast('Enter a phone number', 'error'); return; }
-    const btn = document.getElementById('sendTemplateBtn');
-    btn.disabled = true; btn.textContent = 'Sending...';
-    try {
-      const res = await fetch('/api/send-template', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: phone, template_name: 'trh_introduction', language_code: 'en' })
-      });
-      const data = await res.json();
-      if (data.success) {
-        showToast('Introduction sent ✓', 'success');
-        closeModal();
-        await loadConversations();
-        openConversation(phone, phone);
-      } else {
-        showToast('Error: ' + (data.error || 'Failed'), 'error');
-      }
-    } catch(e) {
-      showToast('Network error', 'error');
-    } finally {
-      btn.disabled = false; btn.textContent = 'Send Introduction';
-    }
-  }
-
-  // ── SEND CUSTOM TEMPLATE ──
-  async function sendCustomTemplate() {
-    const phone = document.getElementById('customPhone').value.trim().replace(/\D/g,'');
-    const select = document.getElementById('customTemplateName');
-    const templateName = select.value;
-    const lang = select.selectedOptions[0]?.dataset?.lang || 'en';
-    if (!phone || !templateName) { showToast('Fill all fields', 'error'); return; }
-    const btn = document.getElementById('sendCustomBtn');
-    btn.disabled = true; btn.textContent = 'Sending...';
-    try {
-      const res = await fetch('/api/send-template', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: phone, template_name: templateName, language_code: lang })
-      });
-      const data = await res.json();
-      if (data.success) {
-        showToast('Template sent ✓', 'success');
-        closeModal();
-        await loadConversations();
-        openConversation(phone, phone);
-      } else {
-        showToast('Error: ' + (data.error || 'Failed'), 'error');
-      }
-    } catch(e) {
-      showToast('Network error', 'error');
-    } finally {
-      btn.disabled = false; btn.textContent = 'Send Template';
     }
   }
 
