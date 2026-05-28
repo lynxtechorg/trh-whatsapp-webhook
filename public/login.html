@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+  <title>The Recovery House — Login</title>
+  <link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg: #0d1117; --surface: #161b22; --border: #2a3340;
+      --green: #25d366; --green-dim: #1a9e4a; --green-glow: rgba(37,211,102,0.10);
+      --text: #e6edf3; --text-muted: #7d8590; --text-dim: #4a5568;
+    }
+    html, body { height: 100%; }
+    body {
+      font-family: 'DM Sans', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100dvh;
+      padding: 24px;
+    }
+
+    /* subtle grid background */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(var(--border) 1px, transparent 1px),
+        linear-gradient(90deg, var(--border) 1px, transparent 1px);
+      background-size: 40px 40px;
+      opacity: 0.3;
+      pointer-events: none;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 36px 32px;
+      width: 100%;
+      max-width: 380px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 14px;
+      margin-bottom: 32px;
+    }
+
+    .logo-wrap {
+      width: 80px; height: 80px;
+      border-radius: 18px;
+      background: var(--green-glow);
+      border: 1px solid #25d36630;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .logo-wrap img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      padding: 8px;
+    }
+
+    .logo-fallback {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 28px;
+      color: var(--green);
+    }
+
+    .brand-name {
+      font-family: 'Syne', sans-serif;
+      font-weight: 800;
+      font-size: 18px;
+      text-align: center;
+      line-height: 1.3;
+    }
+
+    .brand-sub {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: center;
+      margin-top: -8px;
+    }
+
+    .form-group { margin-bottom: 16px; }
+
+    .form-label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+    }
+
+    .form-input {
+      width: 100%;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+      color: var(--text);
+      font-size: 15px;
+      font-family: 'DM Sans', sans-serif;
+      outline: none;
+      transition: border-color 0.2s;
+      -webkit-appearance: none;
+    }
+
+    .form-input:focus { border-color: var(--green-dim); }
+    .form-input::placeholder { color: var(--text-dim); }
+
+    .error-msg {
+      background: rgba(224,92,92,0.08);
+      border: 1px solid rgba(224,92,92,0.3);
+      color: #e05c5c;
+      font-size: 13px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      margin-bottom: 16px;
+      display: none;
+    }
+
+    .error-msg.show { display: block; }
+
+    .login-btn {
+      width: 100%;
+      background: var(--green);
+      color: #000;
+      border: none;
+      border-radius: 10px;
+      padding: 13px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      font-family: 'DM Sans', sans-serif;
+      transition: background 0.2s;
+      margin-top: 4px;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .login-btn:hover, .login-btn:active { background: #1fb857; }
+    .login-btn:disabled { background: var(--border); color: var(--text-dim); cursor: not-allowed; }
+
+    .footer {
+      margin-top: 28px;
+      font-size: 11px;
+      color: var(--text-dim);
+      text-align: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .footer a { color: var(--text-muted); text-decoration: none; }
+    .footer a:hover { color: var(--green); }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <div class="brand">
+    <div class="logo-wrap">
+      <img src="/trh-logo.png" alt="TRH" onerror="this.style.display='none';document.getElementById('logoFallback').style.display='block'"/>
+      <span class="logo-fallback" id="logoFallback" style="display:none">TRH</span>
+    </div>
+    <div class="brand-name">The Recovery House</div>
+    <div class="brand-sub">A project of Caravan of Life Pakistan Trust</div>
+  </div>
+
+  <div class="error-msg" id="errorMsg"></div>
+
+  <div class="form-group">
+    <label class="form-label" for="username">Username</label>
+    <input class="form-input" type="text" id="username" placeholder="Enter your username" autocomplete="username" autocapitalize="none"/>
+  </div>
+
+  <div class="form-group">
+    <label class="form-label" for="password">Password</label>
+    <input class="form-input" type="password" id="password" placeholder="Enter your password" autocomplete="current-password" onkeydown="if(event.key==='Enter') doLogin()"/>
+  </div>
+
+  <button class="login-btn" id="loginBtn" onclick="doLogin()">Sign In</button>
+</div>
+
+<div class="footer">
+  Developed by <a href="https://lynxtech.org" target="_blank" rel="noopener noreferrer">Lynx Tech</a>
+</div>
+
+<script>
+  // If already logged in redirect to app
+  const savedToken = localStorage.getItem('trh_token');
+  if (savedToken) {
+    fetch('/api/conversations', { headers: { Authorization: 'Bearer ' + savedToken } })
+      .then(r => { if (r.ok) window.location.href = '/app'; })
+      .catch(() => {});
+  }
+
+  async function doLogin() {
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    const btn = document.getElementById('loginBtn');
+    const err = document.getElementById('errorMsg');
+
+    if (!username || !password) {
+      showError('Please enter both username and password');
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Signing in...';
+    err.classList.remove('show');
+
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (data.success) {
+        localStorage.setItem('trh_token', data.token);
+        localStorage.setItem('trh_user', data.username);
+        window.location.href = '/app';
+      } else {
+        showError(data.error || 'Login failed');
+      }
+    } catch(e) {
+      showError('Network error — please try again');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Sign In';
+    }
+  }
+
+  function showError(msg) {
+    const err = document.getElementById('errorMsg');
+    err.textContent = msg;
+    err.classList.add('show');
+  }
+</script>
+</body>
+</html>
