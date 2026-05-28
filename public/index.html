@@ -511,12 +511,20 @@
 
 <header>
   <div class="logo">
-    <img src="/trh-logo.png" alt="The Recovery House" style="height:50px; width:auto;" />
+    <!-- LOGO — change height to adjust size, src points to /trh-logo.png in public folder -->
+    <img src="/trh-logo.png" alt="The Recovery House"
+         style="height:34px; width:auto; object-fit:contain;"
+         onerror="this.style.display='none'; document.getElementById('logoText').style.display='flex'"/>
+    <div id="logoText" style="display:none; align-items:center; gap:8px;">
+      <div class="logo-dot"></div>
+      The Recovery House
+    </div>
   </div>
   <div class="header-right">
-    <div class="logo-dot"></div>
     <div class="status-badge">API Live</div>
+    <span id="userLabel" style="font-size:12px;color:var(--text-muted);display:none" class="desktop-only"></span>
     <button class="new-chat-fab" onclick="openModal()">＋ New</button>
+    <button onclick="doLogout()" style="background:transparent;border:1px solid var(--border);color:var(--text-muted);padding:6px 10px;border-radius:8px;font-size:12px;cursor:pointer;font-family:'DM Sans',sans-serif;">Sign out</button>
   </div>
 </header>
 
@@ -597,9 +605,41 @@
   let allConversations = [];
   let activePhone = null;
   let pollInterval = null;
+  let loadedTemplates = [];
   const isMobile = () => window.innerWidth < 640;
 
-  let loadedTemplates = [];
+  // ── AUTH HELPERS ──
+  const getToken = () => localStorage.getItem('trh_token');
+  const getUser  = () => localStorage.getItem('trh_user');
+
+  function authHeaders(extra = {}) {
+    return { 'Authorization': 'Bearer ' + getToken(), ...extra };
+  }
+
+  function handleUnauth(res) {
+    if (res.status === 401) {
+      localStorage.removeItem('trh_token');
+      localStorage.removeItem('trh_user');
+      window.location.href = '/';
+      return true;
+    }
+    return false;
+  }
+
+  // Show logged-in user name in header
+  function initUser() {
+    const user = getUser();
+    if (!user) { window.location.href = '/'; return; }
+    const el = document.getElementById('userLabel');
+    if (el) el.textContent = user;
+  }
+
+  async function doLogout() {
+    await fetch('/api/logout', { method: 'POST', headers: authHeaders() }).catch(() => {});
+    localStorage.removeItem('trh_token');
+    localStorage.removeItem('trh_user');
+    window.location.href = '/';
+  }
 
   // ── MODAL ──
   function openModal() {
@@ -607,63 +647,87 @@
     loadTemplates();
   }
   function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); }
-  function closeModalOutside(e) { if (e.target===document.getElementById('modalOverlay')) closeModal(); }
+  function closeModalOutside(e) { if (e.target === document.getElementById('modalOverlay')) closeModal(); }
 
   // ── FETCH APPROVED TEMPLATES ──
   async function loadTemplates() {
     const select = document.getElementById('templateSelect');
-    select.innerHTML = '<option value="">Fetching your templates...</option>';
+    select.innerHTML = '<option value="">Fetching templates...</option>';
     document.getElementById('variableFields').innerHTML = '';
     document.getElementById('templatePreviewWrap').style.display = 'none';
     try {
-      const res = await fetch('/api/templates');
+      const res = await fetch('/api/templates', { headers: authHeaders() });
+      if (handleUnauth(res)) return;
       const data = await res.json();
       if (data.templates && data.templates.length > 0) {
         loadedTemplates = data.templates;
         select.innerHTML = '<option value="">— Select a template —</option>' +
-          data.templates.map(t =>
-            `<option value="${t.name}">${t.name} (${t.language})</option>`
-          ).join('');
+          data.templates.map(t => `<option value="${t.name}">${t.name} (${t.language})</option>`).join('');
       } else if (data.error) {
         select.innerHTML = `<option value="">Error: ${data.error}</option>`;
       } else {
         select.innerHTML = '<option value="">No approved templates found</option>';
       }
     } catch(e) {
-      select.innerHTML = `<option value="">Network error</option>`;
+      select.innerHTML = '<option value="">Network error</option>';
     }
   }
 
-  // ── WHEN TEMPLATE SELECTED ──
+  // ── WHEN TEMPLATE SELECTED — show preview + variable fields ──
   function onTemplateSelect() {
     const name = document.getElementById('templateSelect').value;
     const tpl = loadedTemplates.find(t => t.name === name);
     const previewWrap = document.getElementById('templatePreviewWrap');
-    const varFields = document.getElementById('variableFields');
+    const varFields   = document.getElementById('variableFields');
     varFields.innerHTML = '';
     if (!tpl) { previewWrap.style.display = 'none'; return; }
     previewWrap.style.display = '';
-    document.getElementById('templatePreviewText').textContent = tpl.body || '(no preview available)';
+    document.getElementById('templatePreviewText').textContent = tpl.body || '(no preview)';
     if (tpl.varCount > 0) {
       let html = '';
       for (let i = 1; i <= tpl.varCount; i++) {
         html += `<div class="form-group" style="margin-top:10px">
-          <div class="form-label">Variable {{${i}}} value</div>
-          <input class="form-input" type="text" id="var_${i}" placeholder="e.g. Ahmad" />
+          <div class="form-label">Variable {{${i}}} — replace with</div>
+          <input class="form-input" type="text" id="var_${i}" placeholder="e.g. Ahmad"
+            oninput="updatePreview()" />
         </div>`;
       }
       varFields.innerHTML = html;
     }
   }
 
+  // ── LIVE PREVIEW UPDATE as user types variables ──
+  function updatePreview() {
+    const tpl = loadedTemplates.find(t => t.name === document.getElementById('templateSelect').value);
+    if (!tpl) return;
+    let preview = tpl.body;
+    for (let i = 1; i <= tpl.varCount; i++) {
+      const val = document.getElementById('var_' + i)?.value || `{{${i}}}`;
+      preview = preview.replace(new RegExp(`\\{\\{${i}\\}\\}`, 'g'), val);
+    }
+    document.getElementById('templatePreviewText').textContent = preview;
+  }
+
+  // ── BUILD PREVIEW TEXT with variables filled in ──
+  function buildPreviewText(tpl) {
+    if (!tpl) return '';
+    let text = tpl.body;
+    for (let i = 1; i <= tpl.varCount; i++) {
+      const val = document.getElementById('var_' + i)?.value?.trim() || `{{${i}}}`;
+      text = text.replace(new RegExp(`\\{\\{${i}\\}\\}`, 'g'), val);
+    }
+    return text;
+  }
+
   // ── SEND TEMPLATE ──
   async function sendTemplate() {
-    const phone = document.getElementById('templatePhone').value.trim().replace(/\D/g,'');
+    const phone = document.getElementById('templatePhone').value.trim().replace(/\D/g, '');
     const select = document.getElementById('templateSelect');
     const templateName = select.value;
     const tpl = loadedTemplates.find(t => t.name === templateName);
     if (!phone) { showToast('Enter a phone number', 'error'); return; }
     if (!templateName || !tpl) { showToast('Select a template', 'error'); return; }
+
     let components = [];
     if (tpl.varCount > 0) {
       const params = [];
@@ -674,14 +738,19 @@
       }
       components = [{ type: 'body', parameters: params }];
     }
+
+    // Build the actual message text with variables filled in — this is what shows in chat
+    const preview_text = buildPreviewText(tpl);
+
     const btn = document.getElementById('sendTemplateBtn');
     btn.disabled = true; btn.textContent = 'Sending...';
     try {
       const res = await fetch('/api/send-template', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: phone, template_name: templateName, language_code: tpl.language, components })
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ to: phone, template_name: templateName, language_code: tpl.language, components, preview_text })
       });
+      if (handleUnauth(res)) return;
       const data = await res.json();
       if (data.success) {
         showToast('Sent ✓', 'success');
@@ -690,10 +759,9 @@
         openConversation(phone, phone);
       } else {
         showToast('Error: ' + (data.error || 'Failed'), 'error');
-        console.error('Template error:', data);
       }
     } catch(e) {
-      showToast('Network error: ' + e.message, 'error');
+      showToast('Network error', 'error');
     } finally {
       btn.disabled = false; btn.textContent = 'Send';
     }
@@ -703,14 +771,15 @@
   function goBack() {
     activePhone = null;
     if (pollInterval) clearInterval(pollInterval);
-    document.getElementById('chatView').classList.remove('open','has-convo');
+    document.getElementById('chatView').classList.remove('open', 'has-convo');
     renderConversationsList(allConversations);
   }
 
   // ── LOAD CONVERSATIONS ──
   async function loadConversations() {
     try {
-      const res = await fetch('/api/conversations');
+      const res = await fetch('/api/conversations', { headers: authHeaders() });
+      if (handleUnauth(res)) return;
       allConversations = await res.json();
       renderConversationsList(allConversations);
     } catch(e) {}
@@ -723,7 +792,7 @@
       return;
     }
     el.innerHTML = list.map(c => `
-      <div class="convo-item" onclick="openConversation('${c.phone}','${escHtml(c.name)}')">
+      <div class="convo-item ${c.phone === activePhone ? 'active' : ''}" onclick="openConversation('${c.phone}','${escHtml(c.name)}')">
         <div class="convo-avatar">${c.name.charAt(0).toUpperCase()}</div>
         <div class="convo-body">
           <div class="convo-top">
@@ -748,10 +817,8 @@
   async function openConversation(phone, name) {
     activePhone = phone;
     renderConversationsList(allConversations);
-
     const chatView = document.getElementById('chatView');
-    chatView.classList.add('open','has-convo');
-
+    chatView.classList.add('open', 'has-convo');
     chatView.innerHTML = `
       <div class="chat-header">
         <button class="back-btn" onclick="goBack()">‹</button>
@@ -769,19 +836,17 @@
         <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
       </div>
     `;
-
     await refreshMessages();
     if (pollInterval) clearInterval(pollInterval);
     pollInterval = setInterval(refreshMessages, 5000);
-
-    // focus input only on desktop to avoid keyboard pop on mobile
     if (!isMobile()) document.getElementById('messageInput')?.focus();
   }
 
   async function refreshMessages() {
     if (!activePhone) return;
     try {
-      const res = await fetch(`/api/conversations/${activePhone}`);
+      const res = await fetch(`/api/conversations/${activePhone}`, { headers: authHeaders() });
+      if (handleUnauth(res)) return;
       const data = await res.json();
       const area = document.getElementById('messagesArea');
       if (!area) return;
@@ -789,7 +854,7 @@
       area.innerHTML = data.messages.map(m => `
         <div class="message-bubble ${m.direction}">
           ${escHtml(m.text)}
-          <div class="message-meta">${formatTime(m.timestamp)}</div>
+          <div class="message-meta">${formatTime(m.timestamp)}${m.sentBy ? ' · ' + escHtml(m.sentBy) : ''}</div>
         </div>
       `).join('');
       if (wasAtBottom) area.scrollTop = area.scrollHeight;
@@ -800,16 +865,17 @@
   // ── SEND MESSAGE ──
   async function sendMessage() {
     const input = document.getElementById('messageInput');
-    const btn = document.getElementById('sendBtn');
-    const text = input.value.trim();
+    const btn   = document.getElementById('sendBtn');
+    const text  = input.value.trim();
     if (!text || !activePhone) return;
     btn.disabled = true;
     try {
       const res = await fetch('/api/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ to: activePhone, message: text })
       });
+      if (handleUnauth(res)) return;
       const data = await res.json();
       if (data.success) {
         input.value = '';
@@ -825,14 +891,19 @@
     }
   }
 
-  function handleKey(e) { if (e.key==='Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
-  function autoResize(el) { el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,100)+'px'; }
-  function formatTime(ts) { if(!ts) return ''; return new Date(ts).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}); }
+  function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
+  function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 100) + 'px'; }
+  function formatTime(ts) { if (!ts) return ''; return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); }
   function escHtml(str) { return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-  function showToast(msg,type='') { const t=document.getElementById('toast'); t.textContent=msg; t.className=`toast show ${type}`; setTimeout(()=>t.className='toast',3500); }
+  function showToast(msg, type = '') { const t = document.getElementById('toast'); t.textContent = msg; t.className = `toast show ${type}`; setTimeout(() => t.className = 'toast', 4000); }
 
-  loadConversations();
-  setInterval(loadConversations, 8000);
+  // ── INIT ──
+  if (!getToken()) { window.location.href = '/'; }
+  else {
+    initUser();
+    loadConversations();
+    setInterval(loadConversations, 8000);
+  }
 </script>
 </body>
 </html>
