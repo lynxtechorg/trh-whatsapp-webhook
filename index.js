@@ -1,7 +1,7 @@
 const express = require("express");
 const crypto  = require("crypto");
 const path    = require("path");
-const { MongoClient } = require("mongodb");
+const { Redis } = require("@upstash/redis");
 const app = express();
 
 app.use(express.json());
@@ -12,59 +12,28 @@ const WHATSAPP_TOKEN  = process.env.WHATSAPP_TOKEN  || "";
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "";
 const MONGODB_URI     = process.env.MONGODB_URI     || "";
 
-// ─── MONGODB SETUP ───
-let db = null;
+// ─── UPSTASH REDIS SETUP ───
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
-async function connectDB() {
-  if (!MONGODB_URI) {
-    console.log("⚠️  No MONGODB_URI — using in-memory store (conversations won't persist)");
-    return;
-  }
-  try {
-    const client = new MongoClient(MONGODB_URI, {
-      tls: true,
-      tlsAllowInvalidCertificates: false,
-      serverSelectionTimeoutMS: 10000,
-    });
-    await client.connect();
-    db = client.db("trh_whatsapp");
-    console.log("✅ MongoDB connected");
-  } catch (err) {
-    console.error("❌ MongoDB connection failed:", err.message);
-    console.log("⚠️  Falling back to in-memory store");
-  }
-}
-
-// ─── CONVERSATION HELPERS (DB or in-memory fallback) ───
-let memStore = {}; // fallback if no DB
+console.log("✅ Upstash Redis connected");
 
 async function getConversation(phone) {
-  if (db) {
-    return await db.collection("conversations").findOne({ phone });
-  }
-  return memStore[phone] || null;
+  const data = await redis.get(`convo:${phone}`);
+  return data || null;
 }
 
 async function saveConversation(phone, data) {
-  if (db) {
-    await db.collection("conversations").updateOne(
-      { phone },
-      { $set: { phone, name: data.name, messages: data.messages, updatedAt: new Date() } },
-      { upsert: true }
-    );
-  } else {
-    memStore[phone] = data;
-  }
+  await redis.set(`convo:${phone}`, data);
 }
 
 async function getAllConversations() {
-  if (db) {
-    return await db.collection("conversations")
-      .find({})
-      .sort({ updatedAt: -1 })
-      .toArray();
-  }
-  return Object.entries(memStore).map(([phone, data]) => ({ phone, ...data }));
+  const keys = await redis.keys("convo:*");
+  if (!keys.length) return [];
+  const convos = await Promise.all(keys.map(k => redis.get(k)));
+  return convos.filter(Boolean);
 }
 
 async function pushMessage(phone, name, message) {
@@ -307,10 +276,8 @@ app.post("/api/send", requireAuth, async (req, res) => {
 });
 
 // ─── START ───
-connectDB().then(() => {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`🚀 TRH WhatsApp server on port ${PORT}`);
-    console.log(`👥 Users: ${Object.keys(parseUsers()).join(", ")}`);
-  });
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 TRH WhatsApp server on port ${PORT}`);
+  console.log(`👥 Users: ${Object.keys(parseUsers()).join(", ")}`);
 });
