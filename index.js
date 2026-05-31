@@ -196,8 +196,19 @@ app.post("/webhook", async (req, res) => {
               const loc = msg.location;
               text = `📍 Location: ${loc?.name || ""} (${loc?.latitude}, ${loc?.longitude})`;
             } else if (msg.type === "contacts") {
-              const c = msg.contacts?.[0];
-              text = `👤 Contact: ${c?.name?.formatted_name || "Unknown"}`;
+              const contacts = msg.contacts || [];
+              const names = contacts.map(c => c?.name?.formatted_name || "Unknown").join(", ");
+              const phones = contacts.flatMap(c => (c?.phones||[]).map(p=>p.wa_id||p.phone)).filter(Boolean);
+              text = `👤 Contact: ${names}`;
+              // Store full contact data for rich display
+              const msgObj2 = {
+                id: msg.id, direction: "incoming",
+                text, timestamp: new Date(parseInt(msg.timestamp)*1000),
+                status: "received", contactData: contacts
+              };
+              await pushMessage(from, name, msgObj2);
+              console.log(`📩 ${name} (${from}): ${text}`);
+              continue;
             } else if (msg.type === "unsupported") {
               text = "⚠️ Unsupported message type";
             } else {
@@ -229,21 +240,37 @@ app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 });
 
-// ─── MEDIA PROXY — fetch media URL from Meta then return to client ───
-app.get("/api/media/:mediaId", requireAuth, async (req, res) => {
+// ─── MEDIA PROXY — uses ?token= in URL so browser src= attributes work ───
+app.get("/api/media/:mediaId", async (req, res) => {
+  // Accept token from query param (for src= attributes) or Authorization header
+  const token = req.query.token ||
+    (req.headers["authorization"] || "").replace("Bearer ", "").trim();
+
+  // Validate session
+  const session = sessions[token];
+  if (!session || Date.now() - session.createdAt > 12 * 60 * 60 * 1000) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
   try {
-    // Step 1: get the download URL
     const metaRes = await fetch(`https://graph.facebook.com/v19.0/${req.params.mediaId}`, {
       headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
     });
     const metaData = await metaRes.json();
-    if (!metaData.url) return res.status(404).json({ error: "Media URL not found" });
+    if (!metaData.url) return res.status(404).json({ error: "Media not found" });
 
-    // Step 2: stream the actual file
     const fileRes = await fetch(metaData.url, {
       headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
     });
-    res.setHeader("Content-Type", metaData.mime_type || "application/octet-stream");
+
+    const contentType = metaData.mime_type || "application/octet-stream";
+    res.setHeader("Content-Type", contentType);
+
+    // For documents/downloads set filename header
+    if (req.query.filename) {
+      res.setHeader("Content-Disposition", `attachment; filename="${req.query.filename}"`);
+    }
+
     const buffer = await fileRes.arrayBuffer();
     res.send(Buffer.from(buffer));
   } catch (err) {
