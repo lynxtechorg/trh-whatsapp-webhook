@@ -1,6 +1,7 @@
-const express = require("express");
-const crypto  = require("crypto");
-const path    = require("path");
+const express  = require("express");
+const crypto   = require("crypto");
+const path     = require("path");
+const webpush  = require("web-push");
 const { Redis } = require("@upstash/redis");
 const app = express();
 
@@ -10,6 +11,17 @@ app.use(express.urlencoded({ extended: true }));
 const VERIFY_TOKEN    = process.env.VERIFY_TOKEN    || "colptwebhook";
 const WHATSAPP_TOKEN  = process.env.WHATSAPP_TOKEN  || "";
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "";
+const VAPID_PUBLIC    = process.env.VAPID_PUBLIC_KEY  || "";
+const VAPID_PRIVATE   = process.env.VAPID_PRIVATE_KEY || "";
+const VAPID_EMAIL     = process.env.VAPID_EMAIL       || "mailto:admin@caravanoflifetrust.org";
+
+// Setup web-push VAPID if keys are configured
+if (VAPID_PUBLIC && VAPID_PRIVATE) {
+  webpush.setVapidDetails(VAPID_EMAIL, VAPID_PUBLIC, VAPID_PRIVATE);
+  console.log("✅ VAPID push notifications configured");
+} else {
+  console.log("⚠️  VAPID keys not set — push notifications disabled");
+}
 
 // ─── UPSTASH REDIS ───
 const redis = new Redis({
@@ -18,8 +30,25 @@ const redis = new Redis({
 });
 console.log("✅ Upstash Redis connected");
 
-// ─── PUSH NOTIFICATION SUBSCRIPTIONS ───
+// ─── PUSH NOTIFICATION SUBSCRIPTIONS (in-memory, per session) ───
 const pushSubscriptions = {};  // username → subscription object
+
+// Send push to all subscribed users
+async function sendPushToAll(title, body, phone) {
+  if (!VAPID_PUBLIC || !VAPID_PRIVATE) return;
+  const payload = JSON.stringify({ title, body, phone });
+  for (const [username, sub] of Object.entries(pushSubscriptions)) {
+    try {
+      await webpush.sendNotification(sub, payload);
+    } catch(err) {
+      if (err.statusCode === 410 || err.statusCode === 404) {
+        // Subscription expired — remove it
+        delete pushSubscriptions[username];
+      }
+      console.log(`Push failed for ${username}:`, err.message);
+    }
+  }
+}
 
 // ─── REDIS HELPERS ───
 async function getConversation(phone) {
@@ -225,6 +254,13 @@ app.post("/webhook", async (req, res) => {
 
             await pushMessage(from, name, msgObj);
             console.log(`📩 ${name} (${from}): ${text}`);
+
+            // Fire push notification to all logged-in staff
+            await sendPushToAll(
+              `New message from ${name}`,
+              text.substring(0, 100),
+              from
+            );
           }
         }
 
@@ -346,6 +382,51 @@ app.delete("/api/conversations/:phone/messages/:msgId", requireAuth, async (req,
     await saveConversation(req.params.phone, convo);
   }
   res.json({ success: true });
+});
+
+// ─── EDIT MESSAGE (within 15 minutes of sending) ───
+app.patch("/api/conversations/:phone/messages/:msgId", requireAuth, async (req, res) => {
+  const { newText } = req.body;
+  if (!newText?.trim()) return res.status(400).json({ error: "New text required" });
+
+  const convo = await getConversation(req.params.phone);
+  if (!convo) return res.status(404).json({ error: "Not found" });
+
+  const msg = convo.messages?.find(m => m.id === req.params.msgId);
+  if (!msg) return res.status(404).json({ error: "Message not found" });
+
+  // Only outgoing messages can be edited
+  if (msg.direction !== "outgoing") return res.status(400).json({ error: "Can only edit sent messages" });
+
+  // 15-minute window
+  const ageMs = Date.now() - new Date(msg.timestamp).getTime();
+  if (ageMs > 15 * 60 * 1000) return res.status(400).json({ error: "Edit window expired (15 minutes)" });
+
+  // Call WhatsApp API to edit
+  try {
+    const r = await fetch(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: req.params.phone,
+        type: "text",
+        text: { body: newText.trim() },
+        context: { message_id: msg.id }
+      }),
+    });
+    const data = await r.json();
+
+    // Update locally regardless (Meta may or may not confirm edit)
+    msg.originalText = msg.originalText || msg.text;
+    msg.text    = newText.trim();
+    msg.edited  = true;
+    msg.editedAt = new Date();
+    await saveConversation(req.params.phone, convo);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── FETCH APPROVED TEMPLATES ───
