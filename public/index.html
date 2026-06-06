@@ -267,6 +267,7 @@
 <div class="msg-actions" id="msgActionsMenu">
   <button class="msg-action-btn" id="actReply"   onclick="doReply()">↩️ Reply</button>
   <button class="msg-action-btn" id="actForward" onclick="doForward()">↪️ Forward</button>
+  <button class="msg-action-btn" id="actEdit"    onclick="doEdit()">✏️ Edit</button>
   <button class="msg-action-btn" id="actInfo"    onclick="doMsgInfo()">ℹ️ Info</button>
   <button class="msg-action-btn" id="actCopy"    onclick="doCopy()">📋 Copy</button>
   <button class="msg-action-btn danger" id="actDelete" onclick="doDelete()">🗑️ Delete</button>
@@ -709,24 +710,30 @@ function showMsgActions(e, msgId) {
   e.stopPropagation();
 
   const menu = document.getElementById("msgActionsMenu");
-  const convoData = currentConvoMessages;
-  activeMsg = convoData?.find(m => m.id === msgId);
+  activeMsg = currentConvoMessages?.find(m => m.id === msgId);
   if (!activeMsg) return;
 
-  // Position menu near tap/click
   const x = e.clientX || e.touches?.[0]?.clientX || window.innerWidth/2;
   const y = e.clientY || e.touches?.[0]?.clientY || window.innerHeight/2;
   menu.style.left = Math.min(x, window.innerWidth  - 160) + "px";
-  menu.style.top  = Math.min(y, window.innerHeight - 200) + "px";
+  menu.style.top  = Math.min(y, window.innerHeight - 220) + "px";
   menu.classList.add("open");
 
-  // Hide copy for media messages
-  document.getElementById("actCopy").style.display =
-    (!activeMsg.mediaType && !activeMsg.contactData) ? "" : "none";
+  // Edit: only outgoing, within 15 minutes, not deleted
+  const ageMs    = Date.now() - new Date(activeMsg.timestamp).getTime();
+  const canEdit  = activeMsg.direction === "outgoing" && ageMs < 15*60*1000 && !activeMsg.deleted && !activeMsg.mediaType;
+  document.getElementById("actEdit").style.display   = canEdit ? "" : "none";
 
-  // Hide delete for already deleted
-  document.getElementById("actDelete").style.display =
-    activeMsg.deleted ? "none" : "";
+  // Copy: only text messages
+  document.getElementById("actCopy").style.display =
+    (!activeMsg.mediaType && !activeMsg.contactData && !activeMsg.deleted) ? "" : "none";
+
+  // Forward: only text, not deleted
+  document.getElementById("actForward").style.display =
+    (!activeMsg.mediaType && !activeMsg.deleted) ? "" : "none";
+
+  // Delete: not already deleted
+  document.getElementById("actDelete").style.display = activeMsg.deleted ? "none" : "";
 
   setTimeout(() => document.addEventListener("click", closeMsgActionsOnce), 10);
 }
@@ -802,6 +809,31 @@ function closeMsgInfo() { document.getElementById("msgInfoOverlay").classList.re
 function doCopy() {
   if (!activeMsg?.text) return;
   navigator.clipboard.writeText(activeMsg.text).then(() => showToast("Copied ✓","success")).catch(()=>{});
+}
+
+// ── EDIT ──
+function doEdit() {
+  if (!activeMsg || !activePhone) return;
+
+  // Double-check 15-min window client-side
+  const ageMs = Date.now() - new Date(activeMsg.timestamp).getTime();
+  const remaining = Math.ceil((15*60*1000 - ageMs) / 1000);
+  if (remaining <= 0) { showToast("Edit window expired","error"); return; }
+
+  const newText = prompt(
+    `Edit message (${remaining}s remaining):\n\nOriginal: "${activeMsg.text}"`,
+    activeMsg.text
+  );
+  if (!newText || newText.trim() === activeMsg.text) return;
+
+  fetch(`/api/conversations/${activePhone}/messages/${activeMsg.id}`, {
+    method: "PATCH",
+    headers: authH({"Content-Type":"application/json"}),
+    body: JSON.stringify({ newText: newText.trim() })
+  }).then(r => r.json()).then(d => {
+    if (d.success) { showToast("Message edited ✓","success"); refreshMessages(); }
+    else showToast("Error: " + (d.error||"Failed"),"error");
+  }).catch(() => showToast("Network error","error"));
 }
 
 // ── DELETE ──
@@ -890,8 +922,9 @@ function renderMessage(m) {
     content = quote + `<span class="message-text">${escHtml(m.text)}</span>`;
   }
 
-  const tick   = m.direction==="outgoing" ? renderTick(m.status) : "";
-  const sentBy = (m.direction==="outgoing" && m.sentBy) ? ` · ${escHtml(m.sentBy)}` : "";
+  const tick    = m.direction==="outgoing" ? renderTick(m.status) : "";
+  const sentBy  = (m.direction==="outgoing" && m.sentBy) ? ` · ${escHtml(m.sentBy)}` : "";
+  const edited  = m.edited ? `<span style="color:var(--text-dim);font-size:10px"> · Edited</span>` : "";
 
   return `<div class="message-bubble ${m.direction}"
     oncontextmenu="showMsgActions(event,'${m.id}')"
@@ -899,7 +932,7 @@ function renderMessage(m) {
     ontouchend="clearLongPress()"
     ontouchmove="clearLongPress()">
     ${content}
-    <div class="message-meta">${formatTime(m.timestamp)}${sentBy}${tick}</div>
+    <div class="message-meta">${formatTime(m.timestamp)}${sentBy}${edited}${tick}</div>
   </div>`;
 }
 
