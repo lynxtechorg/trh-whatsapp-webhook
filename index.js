@@ -43,9 +43,8 @@ async function pushMessage(phone, name, message) {
   return convo;
 }
 
-// Update message status (read receipts)
+// Update message status with timestamp
 async function updateMessageStatus(msgId, status) {
-  // We need to find which conversation has this message
   const keys = await redis.keys("convo:*");
   for (const key of keys) {
     const convo = await redis.get(key);
@@ -53,6 +52,8 @@ async function updateMessageStatus(msgId, status) {
     const msg = convo.messages?.find(m => m.id === msgId);
     if (msg) {
       msg.status = status;
+      if (status === "delivered") msg.deliveredAt = new Date();
+      if (status === "read")      msg.readAt      = new Date();
       await redis.set(key, convo);
       break;
     }
@@ -240,39 +241,60 @@ app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 });
 
-// ─── MEDIA PROXY — uses ?token= in URL so browser src= attributes work ───
+// ─── MEDIA PROXY — supports range requests for proper audio/video streaming ───
 app.get("/api/media/:mediaId", async (req, res) => {
-  // Accept token from query param (for src= attributes) or Authorization header
   const token = req.query.token ||
     (req.headers["authorization"] || "").replace("Bearer ", "").trim();
-
-  // Validate session
   const session = sessions[token];
   if (!session || Date.now() - session.createdAt > 12 * 60 * 60 * 1000) {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
   try {
+    // Step 1: get download URL from Meta
     const metaRes = await fetch(`https://graph.facebook.com/v19.0/${req.params.mediaId}`, {
       headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
     });
     const metaData = await metaRes.json();
     if (!metaData.url) return res.status(404).json({ error: "Media not found" });
 
+    // Step 2: fetch full file
     const fileRes = await fetch(metaData.url, {
       headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
     });
 
+    const buffer = Buffer.from(await fileRes.arrayBuffer());
     const contentType = metaData.mime_type || "application/octet-stream";
-    res.setHeader("Content-Type", contentType);
+    const totalSize = buffer.length;
 
-    // For documents/downloads set filename header
     if (req.query.filename) {
       res.setHeader("Content-Disposition", `attachment; filename="${req.query.filename}"`);
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("Content-Length", totalSize);
+      return res.send(buffer);
     }
 
-    const buffer = await fileRes.arrayBuffer();
-    res.send(Buffer.from(buffer));
+    // Handle range requests (critical for audio/video seeking)
+    const rangeHeader = req.headers.range;
+    if (rangeHeader) {
+      const parts  = rangeHeader.replace(/bytes=/, "").split("-");
+      const start  = parseInt(parts[0], 10);
+      const end    = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+      const chunk  = end - start + 1;
+
+      res.writeHead(206, {
+        "Content-Range":  `bytes ${start}-${end}/${totalSize}`,
+        "Accept-Ranges":  "bytes",
+        "Content-Length": chunk,
+        "Content-Type":   contentType,
+      });
+      return res.end(buffer.slice(start, end + 1));
+    }
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Length", totalSize);
+    res.setHeader("Accept-Ranges", "bytes");
+    res.send(buffer);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -307,6 +329,22 @@ app.post("/api/conversations/:phone/meta", requireAuth, async (req, res) => {
   if (tags !== undefined) convo.tags = tags;
   if (note !== undefined) convo.note = note;
   await saveConversation(req.params.phone, convo);
+  res.json({ success: true });
+});
+
+// ─── DELETE MESSAGE (hide from UI only) ───
+app.delete("/api/conversations/:phone/messages/:msgId", requireAuth, async (req, res) => {
+  const convo = await getConversation(req.params.phone);
+  if (!convo) return res.status(404).json({ error: "Not found" });
+  const msg = convo.messages?.find(m => m.id === req.params.msgId);
+  if (msg) {
+    msg.deleted = true;
+    msg.text = "🚫 Message deleted";
+    delete msg.mediaId;
+    delete msg.mediaType;
+    delete msg.contactData;
+    await saveConversation(req.params.phone, convo);
+  }
   res.json({ success: true });
 });
 
@@ -361,7 +399,7 @@ app.post("/api/send-template", requireAuth, async (req, res) => {
 
 // ─── SEND MESSAGE ───
 app.post("/api/send", requireAuth, async (req, res) => {
-  const { to, message } = req.body;
+  const { to, message, replyTo } = req.body;
   console.log(`📤 [${req.user}] → ${to}: ${message}`);
   if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) return res.status(500).json({ error: "Not configured" });
   try {
@@ -373,7 +411,9 @@ app.post("/api/send", requireAuth, async (req, res) => {
     const data = await r.json();
     console.log(`📬 Meta:`, JSON.stringify(data));
     if (data.messages) {
-      await pushMessage(to, to, { id: data.messages[0].id, direction: "outgoing", text: message, timestamp: new Date(), read: true, sentBy: req.user, status: "sent" });
+      const msgObj = { id: data.messages[0].id, direction: "outgoing", text: message, timestamp: new Date(), read: true, sentBy: req.user, status: "sent" };
+      if (replyTo) msgObj.replyTo = replyTo;
+      await pushMessage(to, to, msgObj);
       res.json({ success: true });
     } else {
       res.status(400).json({ error: data.error?.message || "Failed" });
