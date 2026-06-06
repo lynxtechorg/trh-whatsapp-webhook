@@ -162,7 +162,40 @@
       .modal-handle{display:none}
     }
 
-    /* FOOTER */
+    /* LIGHTBOX */
+    .lightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:200;display:none;align-items:center;justify-content:center}
+    .lightbox.open{display:flex}
+    .lightbox img{max-width:92vw;max-height:88vh;border-radius:8px;object-fit:contain}
+    .lightbox-close{position:absolute;top:16px;right:16px;background:rgba(255,255,255,.15);border:none;color:#fff;font-size:22px;width:40px;height:40px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center}
+
+    /* MESSAGE ACTIONS (swipe/long press menu) */
+    .msg-actions{position:absolute;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:4px;display:none;flex-direction:column;gap:1px;z-index:20;box-shadow:0 4px 20px rgba(0,0,0,.4);min-width:140px}
+    .msg-actions.open{display:flex}
+    .msg-action-btn{background:transparent;border:none;color:var(--text);font-size:13px;padding:8px 14px;text-align:left;cursor:pointer;border-radius:7px;font-family:'DM Sans',sans-serif;display:flex;align-items:center;gap:8px;white-space:nowrap}
+    .msg-action-btn:hover{background:var(--surface2)}
+    .msg-action-btn.danger{color:#e05c5c}
+
+    /* REPLY QUOTE */
+    .reply-preview{background:var(--surface2);border-left:3px solid var(--green);border-radius:0 8px 8px 0;padding:8px 12px;margin-bottom:6px;font-size:12px;color:var(--text-muted);position:relative}
+    .reply-preview strong{color:var(--text);display:block;margin-bottom:2px;font-size:11px}
+    .reply-cancel{position:absolute;top:6px;right:8px;background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:14px}
+    .reply-bar{padding:6px 14px 0;background:var(--surface);border-top:1px solid var(--border);display:none}
+    .reply-bar.open{display:block}
+
+    /* QUOTED message inside bubble */
+    .quoted-msg{background:rgba(0,0,0,.2);border-left:3px solid var(--green);border-radius:0 6px 6px 0;padding:5px 8px;margin-bottom:6px;font-size:11px;color:var(--text-muted);cursor:pointer}
+    .quoted-msg strong{color:var(--text);display:block;font-size:10px;margin-bottom:1px}
+
+    /* MESSAGE INFO PANEL */
+    .msg-info-overlay{position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:100;display:none;align-items:flex-end;justify-content:center}
+    .msg-info-overlay.open{display:flex}
+    .msg-info-panel{background:var(--surface);border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:20px 20px max(20px,env(safe-area-inset-bottom));animation:slideUp .25s}
+    .msg-info-title{font-family:'Syne',sans-serif;font-weight:700;font-size:16px;margin-bottom:16px;display:flex;justify-content:space-between}
+    .msg-info-row{display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border);font-size:14px}
+    .msg-info-row:last-child{border-bottom:none}
+    .msg-info-icon{font-size:18px;width:28px;text-align:center;flex-shrink:0}
+    .msg-info-label{color:var(--text-muted);font-size:12px}
+    .msg-info-val{font-size:13px;font-weight:500}
     .footer-bar{background:var(--surface);border-top:1px solid var(--border);padding:6px 16px;text-align:center;font-size:11px;color:var(--text-dim);flex-shrink:0}
     .footer-bar a{color:var(--text-muted);text-decoration:none;font-weight:500}
     .footer-bar a:hover{color:var(--green)}
@@ -215,6 +248,29 @@
 </div>
 
 <div class="footer-bar">Developed by <a href="https://lynxtech.org" target="_blank" rel="noopener noreferrer">Lynx Tech</a></div>
+
+<!-- LIGHTBOX -->
+<div class="lightbox" id="lightbox" onclick="closeLightbox()">
+  <button class="lightbox-close" onclick="closeLightbox()">✕</button>
+  <img id="lightboxImg" src="" alt=""/>
+</div>
+
+<!-- MESSAGE INFO PANEL -->
+<div class="msg-info-overlay" id="msgInfoOverlay" onclick="closeMsgInfo()">
+  <div class="msg-info-panel" onclick="event.stopPropagation()">
+    <div class="msg-info-title">Message Info <button style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:18px" onclick="closeMsgInfo()">✕</button></div>
+    <div id="msgInfoContent"></div>
+  </div>
+</div>
+
+<!-- MESSAGE ACTIONS MENU (positioned dynamically) -->
+<div class="msg-actions" id="msgActionsMenu">
+  <button class="msg-action-btn" id="actReply"   onclick="doReply()">↩️ Reply</button>
+  <button class="msg-action-btn" id="actForward" onclick="doForward()">↪️ Forward</button>
+  <button class="msg-action-btn" id="actInfo"    onclick="doMsgInfo()">ℹ️ Info</button>
+  <button class="msg-action-btn" id="actCopy"    onclick="doCopy()">📋 Copy</button>
+  <button class="msg-action-btn danger" id="actDelete" onclick="doDelete()">🗑️ Delete</button>
+</div>
 
 <!-- NEW CONVERSATION MODAL -->
 <div class="modal-overlay" id="modalOverlay" onclick="closeModalOutside(event)">
@@ -556,6 +612,13 @@ async function openConversation(phone, name) {
         <button class="save-meta-btn" onclick="saveMeta('${phone}')">Save</button>
       </div>
     </div>
+    <div class="reply-bar" id="replyBar">
+      <div class="reply-preview" id="replyPreview">
+        <strong id="replyFrom"></strong>
+        <span id="replyText"></span>
+        <button class="reply-cancel" onclick="cancelReply()">✕</button>
+      </div>
+    </div>
     <div class="input-bar">
       <textarea class="message-input" id="messageInput" placeholder="Message..." rows="1"
         onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
@@ -606,10 +669,11 @@ async function refreshMessages() {
     const r = await fetch(`/api/conversations/${activePhone}`,{headers:authH()});
     if (handleUnauth(r)) return;
     const data = await r.json();
+    currentConvoMessages = data.messages || [];
     const area = document.getElementById("messagesArea");
     if (!area) return;
     const atBottom = area.scrollHeight - area.scrollTop - area.clientHeight < 80;
-    area.innerHTML = data.messages.map(m => renderMessage(m)).join("");
+    area.innerHTML = currentConvoMessages.map(m => renderMessage(m)).join("");
     if (atBottom) area.scrollTop = area.scrollHeight;
     await loadConversations();
   } catch(e) {}
@@ -628,21 +692,152 @@ function getDocIcon(filename) {
   return icons[ext] || "📄";
 }
 
+// ── LIGHTBOX ──
+function openLightbox(src) {
+  document.getElementById("lightboxImg").src = src;
+  document.getElementById("lightbox").classList.add("open");
+}
+function closeLightbox() {
+  document.getElementById("lightbox").classList.remove("open");
+}
+
+// ── MESSAGE ACTIONS MENU ──
+let activeMsg = null; // { id, text, direction, phone, sentAt, deliveredAt, readAt }
+
+function showMsgActions(e, msgId) {
+  e.preventDefault();
+  e.stopPropagation();
+
+  const menu = document.getElementById("msgActionsMenu");
+  const convoData = currentConvoMessages;
+  activeMsg = convoData?.find(m => m.id === msgId);
+  if (!activeMsg) return;
+
+  // Position menu near tap/click
+  const x = e.clientX || e.touches?.[0]?.clientX || window.innerWidth/2;
+  const y = e.clientY || e.touches?.[0]?.clientY || window.innerHeight/2;
+  menu.style.left = Math.min(x, window.innerWidth  - 160) + "px";
+  menu.style.top  = Math.min(y, window.innerHeight - 200) + "px";
+  menu.classList.add("open");
+
+  // Hide copy for media messages
+  document.getElementById("actCopy").style.display =
+    (!activeMsg.mediaType && !activeMsg.contactData) ? "" : "none";
+
+  // Hide delete for already deleted
+  document.getElementById("actDelete").style.display =
+    activeMsg.deleted ? "none" : "";
+
+  setTimeout(() => document.addEventListener("click", closeMsgActionsOnce), 10);
+}
+
+function closeMsgActionsOnce() {
+  document.getElementById("msgActionsMenu").classList.remove("open");
+  document.removeEventListener("click", closeMsgActionsOnce);
+}
+
+// ── REPLY ──
+let replyingTo = null;
+
+function doReply() {
+  if (!activeMsg) return;
+  replyingTo = activeMsg;
+  const bar  = document.getElementById("replyBar");
+  bar.classList.add("open");
+  document.getElementById("replyFrom").textContent =
+    activeMsg.direction === "outgoing" ? "You" : (allConversations.find(c=>c.phone===activePhone)?.name || activePhone);
+  document.getElementById("replyText").textContent =
+    (activeMsg.text || "").substring(0, 80) + ((activeMsg.text||"").length > 80 ? "…" : "");
+  document.getElementById("messageInput").focus();
+}
+
+function cancelReply() {
+  replyingTo = null;
+  document.getElementById("replyBar").classList.remove("open");
+}
+
+// ── FORWARD ──
+function doForward() {
+  if (!activeMsg) return;
+  const text = activeMsg.text || "";
+  if (!text || activeMsg.mediaType) { showToast("Can only forward text messages","error"); return; }
+  const phone = prompt("Forward to number (e.g. 923001234567):");
+  if (!phone) return;
+  fetch("/api/send", {
+    method:"POST", headers:authH({"Content-Type":"application/json"}),
+    body: JSON.stringify({ to: phone.replace(/\D/g,""), message: "↪️ Forwarded:\n\n" + text })
+  }).then(r=>r.json()).then(d => {
+    if (d.success) showToast("Forwarded ✓","success");
+    else showToast("Error: "+(d.error||"Failed"),"error");
+  });
+}
+
+// ── MESSAGE INFO ──
+function doMsgInfo() {
+  if (!activeMsg) return;
+  const fmt = ts => ts ? new Date(ts).toLocaleString([],{dateStyle:"medium",timeStyle:"short"}) : "—";
+  document.getElementById("msgInfoContent").innerHTML = `
+    <div class="msg-info-row">
+      <span class="msg-info-icon">📨</span>
+      <div><div class="msg-info-label">Sent</div><div class="msg-info-val">${fmt(activeMsg.timestamp)}</div></div>
+    </div>
+    <div class="msg-info-row">
+      <span class="msg-info-icon" style="color:var(--text-muted)">✓✓</span>
+      <div><div class="msg-info-label">Delivered</div><div class="msg-info-val">${fmt(activeMsg.deliveredAt)}</div></div>
+    </div>
+    <div class="msg-info-row">
+      <span class="msg-info-icon" style="color:#53bdeb">✓✓</span>
+      <div><div class="msg-info-label">Read</div><div class="msg-info-val">${fmt(activeMsg.readAt)}</div></div>
+    </div>
+    ${activeMsg.sentBy ? `<div class="msg-info-row">
+      <span class="msg-info-icon">👤</span>
+      <div><div class="msg-info-label">Sent by</div><div class="msg-info-val">${escHtml(activeMsg.sentBy)}</div></div>
+    </div>` : ""}
+  `;
+  document.getElementById("msgInfoOverlay").classList.add("open");
+}
+function closeMsgInfo() { document.getElementById("msgInfoOverlay").classList.remove("open"); }
+
+// ── COPY ──
+function doCopy() {
+  if (!activeMsg?.text) return;
+  navigator.clipboard.writeText(activeMsg.text).then(() => showToast("Copied ✓","success")).catch(()=>{});
+}
+
+// ── DELETE ──
+async function doDelete() {
+  if (!activeMsg || !activePhone) return;
+  if (!confirm("Delete this message? It will be hidden for everyone on this messenger.")) return;
+  try {
+    const r = await fetch(`/api/conversations/${activePhone}/messages/${activeMsg.id}`, {
+      method:"DELETE", headers:authH()
+    });
+    if (r.ok) { showToast("Deleted",""); await refreshMessages(); }
+    else showToast("Failed to delete","error");
+  } catch(e) { showToast("Network error","error"); }
+}
+
+// Store current messages for action menu lookup
+let currentConvoMessages = [];
+
 function renderMessage(m) {
   let content = "";
 
-  if (m.mediaType === "image") {
+  if (m.deleted) {
+    content = `<span style="color:var(--text-dim);font-style:italic">🚫 Message deleted</span>`;
+  } else if (m.mediaType === "image") {
     const src = mediaUrl(m.mediaId);
     content = `<div class="media-bubble">
       <img src="${src}" loading="lazy" alt="Image"
         style="max-width:220px;border-radius:10px;display:block;cursor:pointer"
-        onclick="window.open('${src}','_blank')"
-        onerror="this.outerHTML='<span>📷 Image (failed to load)</span>'"/>
+        onclick="openLightbox('${src}')"
+        onerror="this.outerHTML='<span style=color:var(--text-muted)>📷 Image (failed to load)</span>'"/>
     </div>`;
   } else if (m.mediaType === "audio") {
     const src = mediaUrl(m.mediaId);
     content = `<div class="audio-player">
-      <audio controls preload="none" style="height:36px;flex:1;min-width:160px;max-width:240px">
+      <audio controls preload="auto" style="height:36px;flex:1;min-width:180px;max-width:260px">
+        <source src="${src}" type="${m.mimeType||'audio/ogg'}"/>
         <source src="${src}"/>
       </audio>
     </div>`;
@@ -660,12 +855,12 @@ function renderMessage(m) {
     const src = mediaUrl(m.mediaId);
     content = `<div class="media-bubble">
       <video controls preload="none" style="width:100%;border-radius:10px;max-height:200px;max-width:260px">
-        <source src="${src}"/>
+        <source src="${src}" type="${m.mimeType||'video/mp4'}"/>
       </video>
     </div>`;
   } else if (m.mediaType === "sticker") {
     const src = mediaUrl(m.mediaId);
-    content = `<div class="media-bubble">
+    content = `<div>
       <img src="${src}" loading="lazy" alt="Sticker"
         style="max-width:120px;border-radius:4px;display:block"
         onerror="this.outerHTML='<span>🪄 Sticker</span>'"/>
@@ -673,33 +868,48 @@ function renderMessage(m) {
   } else if (m.contactData) {
     content = m.contactData.map(c => {
       const cname  = c?.name?.formatted_name || "Unknown";
-      const phones = (c?.phones||[]).map(p => `<div style="color:var(--green);font-size:12px;margin-top:2px">📞 ${p.wa_id||p.phone}</div>`).join("");
+      const phones = (c?.phones||[]).map(p =>
+        `<div style="color:var(--green);font-size:12px;margin-top:3px">📞 ${p.wa_id||p.phone}</div>`
+      ).join("");
       const waNum  = (c?.phones?.[0]?.wa_id||c?.phones?.[0]?.phone||"").replace(/\D/g,"");
-      return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 10px;min-width:160px">
-        <div style="font-weight:600;margin-bottom:4px">👤 ${escHtml(cname)}</div>
+      return `<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;min-width:170px">
+        <div style="font-weight:600;font-size:14px">👤 ${escHtml(cname)}</div>
         ${phones}
-        ${waNum?`<div style="margin-top:6px"><span style="font-size:11px;color:var(--green);cursor:pointer;text-decoration:underline"
-          onclick="openConversation('${waNum}','${escHtml(cname)}')">Message</span></div>`:""}
+        ${waNum?`<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+          <span style="font-size:12px;color:var(--green);cursor:pointer;font-weight:500"
+            onclick="openConversation('${waNum}','${escHtml(cname)}')">💬 Message</span>
+        </div>`:""}
       </div>`;
     }).join("");
   } else {
-    content = `<span class="message-text">${escHtml(m.text)}</span>`;
+    // Quoted reply
+    const quote = m.replyTo ? `<div class="quoted-msg">
+      <strong>${escHtml(m.replyTo.from)}</strong>
+      ${escHtml((m.replyTo.text||"").substring(0,60))}${(m.replyTo.text||"").length>60?"…":""}
+    </div>` : "";
+    content = quote + `<span class="message-text">${escHtml(m.text)}</span>`;
   }
 
   const tick   = m.direction==="outgoing" ? renderTick(m.status) : "";
   const sentBy = (m.direction==="outgoing" && m.sentBy) ? ` · ${escHtml(m.sentBy)}` : "";
 
-  return `<div class="message-bubble ${m.direction}">
+  return `<div class="message-bubble ${m.direction}"
+    oncontextmenu="showMsgActions(event,'${m.id}')"
+    ontouchstart="startLongPress(event,'${m.id}')"
+    ontouchend="clearLongPress()"
+    ontouchmove="clearLongPress()">
     ${content}
     <div class="message-meta">${formatTime(m.timestamp)}${sentBy}${tick}</div>
   </div>`;
 }
 
-function renderTick(status) {
-  if (status === "read")      return `<span class="tick read">✓✓</span>`;
-  if (status === "delivered") return `<span class="tick delivered">✓✓</span>`;
-  if (status === "sent")      return `<span class="tick">✓</span>`;
-  return "";
+// Long press for mobile
+let longPressTimer = null;
+function startLongPress(e, msgId) {
+  longPressTimer = setTimeout(() => showMsgActions(e, msgId), 500);
+}
+function clearLongPress() {
+  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
 }
 
 // ── SEND ──
@@ -710,16 +920,43 @@ async function sendMessage() {
   if (!text||!activePhone) return;
   btn.disabled = true;
   try {
-    const r = await fetch("/api/send",{method:"POST",headers:authH({"Content-Type":"application/json"}),body:JSON.stringify({to:activePhone,message:text})});
+    const payload = { to: activePhone, message: text };
+    if (replyingTo) {
+      payload.replyTo = {
+        id:   replyingTo.id,
+        text: replyingTo.text || "",
+        from: replyingTo.direction === "outgoing" ? "You" : (allConversations.find(c=>c.phone===activePhone)?.name||activePhone)
+      };
+    }
+    const r = await fetch("/api/send",{method:"POST",headers:authH({"Content-Type":"application/json"}),body:JSON.stringify(payload)});
     if (handleUnauth(r)) return;
     const d = await r.json();
-    if (d.success) { input.value=""; input.style.height="auto"; await refreshMessages(); }
-    else showToast("Error: "+(d.error||"Failed"),"error");
+    if (d.success) {
+      input.value=""; input.style.height="auto";
+      cancelReply();
+      await refreshMessages();
+    } else showToast("Error: "+(d.error||"Failed"),"error");
   } catch(e) { showToast("Network error","error"); }
   finally { btn.disabled=false; }
 }
 
 // ── HELPERS ──
+function renderTick(status) {
+  if (status === "read")      return `<span class="tick read">✓✓</span>`;
+  if (status === "delivered") return `<span class="tick delivered">✓✓</span>`;
+  if (status === "sent")      return `<span class="tick">✓</span>`;
+  return "";
+}
+
+// Keyboard shortcuts
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape") {
+    closeLightbox();
+    closeMsgInfo();
+    document.getElementById("msgActionsMenu")?.classList.remove("open");
+  }
+});
+
 function handleKey(e) { if (e.key==="Enter"&&!e.shiftKey) { e.preventDefault(); sendMessage(); } }
 function autoResize(el) { el.style.height="auto"; el.style.height=Math.min(el.scrollHeight,100)+"px"; }
 function formatTime(ts) { if (!ts) return ""; return new Date(ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); }
