@@ -1,4 +1,4 @@
-const CACHE = "trh-v1";
+const CACHE = "trh-v2";
 const PRECACHE = ["/app", "/trh-logo.png", "/manifest.json"];
 
 self.addEventListener("install", e => {
@@ -24,7 +24,7 @@ self.addEventListener("fetch", e => {
 self.addEventListener("push", e => {
   const data = e.data?.json() || {};
   e.waitUntil(
-    self.registration.showNotification(data.title || "New Message", {
+    self.registration.showNotification(data.title || "New Message — The Recovery House", {
       body: data.body || "You have a new WhatsApp message",
       icon: "/trh-logo.png",
       badge: "/trh-logo.png",
@@ -39,8 +39,9 @@ self.addEventListener("push", e => {
 self.addEventListener("notificationclick", e => {
   e.notification.close();
   e.waitUntil(
-    clients.matchAll({ type: "window" }).then(list => {
-      if (list.length) { list[0].focus(); return; }
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then(list => {
+      const existing = list.find(c => c.url.includes("/app"));
+      if (existing) { existing.focus(); return; }
       clients.openWindow("/app");
     })
   );
