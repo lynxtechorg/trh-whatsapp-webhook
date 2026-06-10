@@ -13,7 +13,7 @@ const WHATSAPP_TOKEN  = process.env.WHATSAPP_TOKEN  || "";
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "";
 const VAPID_PUBLIC    = process.env.VAPID_PUBLIC_KEY  || "";
 const VAPID_PRIVATE   = process.env.VAPID_PRIVATE_KEY || "";
-const VAPID_EMAIL     = process.env.VAPID_EMAIL       || "mailto:admin@caravanoflifetrust.org";
+const VAPID_EMAIL     = process.env.VAPID_EMAIL       || "mailto:fahad.qadri@caravanoflifetrust.org";
 
 // Setup web-push VAPID if keys are configured
 if (VAPID_PUBLIC && VAPID_PRIVATE) {
@@ -500,6 +500,105 @@ app.post("/api/send", requireAuth, async (req, res) => {
       res.status(400).json({ error: data.error?.message || "Failed" });
     }
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── BROADCAST ───
+// Store broadcast jobs in memory (progress tracking)
+const broadcastJobs = {};
+
+app.post("/api/broadcast", requireAuth, async (req, res) => {
+  const { contacts, template_name, language_code, components_template, default_country_code } = req.body;
+  // contacts = [{ name, phone, variables: ["val1","val2",...] }]
+
+  if (!contacts?.length)       return res.status(400).json({ error: "No contacts provided" });
+  if (!template_name)          return res.status(400).json({ error: "No template selected" });
+  if (!WHATSAPP_TOKEN || !PHONE_NUMBER_ID) return res.status(500).json({ error: "Not configured" });
+
+  const jobId = crypto.randomBytes(8).toString("hex");
+  broadcastJobs[jobId] = { total: contacts.length, sent: 0, failed: 0, skipped: 0, errors: [], status: "running", startedAt: new Date() };
+
+  // Respond immediately with job ID — process in background
+  res.json({ success: true, jobId, total: contacts.length });
+
+  // Helper: normalise phone number
+  function normalisePhone(raw, countryCode) {
+    if (!raw) return null;
+    let n = String(raw).replace(/[\s\-\(\)\+\.]/g, "");
+    if (n.startsWith("00")) n = n.slice(2);
+    if (n.startsWith("0"))  n = (countryCode || "92") + n.slice(1);
+    if (!/^\d{7,15}$/.test(n)) return null;
+    return n;
+  }
+
+  // Process in background with 1 second delay between messages (rate limiting)
+  const job = broadcastJobs[jobId];
+  for (const contact of contacts) {
+    if (job.status === "cancelled") break;
+
+    const phone = normalisePhone(contact.phone, default_country_code || "92");
+    if (!phone) {
+      job.skipped++;
+      job.errors.push({ name: contact.name, phone: contact.phone, reason: "Invalid number" });
+      continue;
+    }
+
+    try {
+      // Build template object with per-contact variables
+      const templateObj = { name: template_name, language: { code: language_code || "en" } };
+      if (contact.variables?.length) {
+        templateObj.components = [{
+          type: "body",
+          parameters: contact.variables.map(v => ({ type: "text", text: v }))
+        }];
+      }
+
+      const r = await fetch(`https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ messaging_product: "whatsapp", to: phone, type: "template", template: templateObj }),
+      });
+      const data = await r.json();
+
+      if (data.messages) {
+        job.sent++;
+        // Store in conversation
+        const displayText = contact.previewText || `[Template: ${template_name}]`;
+        await pushMessage(phone, contact.name || phone, {
+          id: data.messages[0].id, direction: "outgoing",
+          text: displayText, timestamp: new Date(),
+          read: true, sentBy: req.user, status: "sent"
+        });
+      } else {
+        job.failed++;
+        job.errors.push({ name: contact.name, phone, reason: data.error?.message || "Send failed" });
+      }
+    } catch (err) {
+      job.failed++;
+      job.errors.push({ name: contact.name, phone, reason: err.message });
+    }
+
+    // 1 second between messages to respect rate limits
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  job.status = "done";
+  job.finishedAt = new Date();
+  console.log(`📢 Broadcast ${jobId} done: ${job.sent} sent, ${job.failed} failed, ${job.skipped} skipped`);
+});
+
+// ─── BROADCAST STATUS ───
+app.get("/api/broadcast/:jobId", requireAuth, (req, res) => {
+  const job = broadcastJobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  res.json(job);
+});
+
+// ─── CANCEL BROADCAST ───
+app.delete("/api/broadcast/:jobId", requireAuth, (req, res) => {
+  const job = broadcastJobs[req.params.jobId];
+  if (!job) return res.status(404).json({ error: "Job not found" });
+  job.status = "cancelled";
+  res.json({ success: true });
 });
 
 // ─── START ───
