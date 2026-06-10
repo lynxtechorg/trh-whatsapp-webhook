@@ -196,6 +196,21 @@
     .msg-info-icon{font-size:18px;width:28px;text-align:center;flex-shrink:0}
     .msg-info-label{color:var(--text-muted);font-size:12px}
     .msg-info-val{font-size:13px;font-weight:500}
+    /* BROADCAST */
+    .bc-step{display:none}.bc-step.active{display:block}
+    .bc-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:8px}
+    .bc-table th{background:var(--surface2);padding:6px 10px;text-align:left;font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.06em}
+    .bc-table td{padding:6px 10px;border-bottom:1px solid var(--border);color:var(--text)}
+    .bc-table tr:last-child td{border-bottom:none}
+    .bc-table select{background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);padding:3px 6px;font-size:12px;font-family:'DM Sans',sans-serif;outline:none}
+    .progress-bar-wrap{background:var(--surface2);border-radius:8px;height:10px;overflow:hidden;margin:8px 0}
+    .progress-bar-fill{height:100%;background:var(--green);border-radius:8px;transition:width .3s}
+    .bc-stats{display:flex;gap:12px;margin:8px 0}
+    .bc-stat{flex:1;background:var(--surface2);border-radius:8px;padding:10px;text-align:center}
+    .bc-stat-val{font-size:22px;font-weight:700;font-family:'Syne',sans-serif}
+    .bc-stat-label{font-size:10px;color:var(--text-muted);text-transform:uppercase;margin-top:2px}
+    .bc-errors{max-height:100px;overflow-y:auto;font-size:11px;color:#e05c5c;margin-top:6px;line-height:1.6}
+
     .footer-bar{background:var(--surface);border-top:1px solid var(--border);padding:6px 16px;text-align:center;font-size:11px;color:var(--text-dim);flex-shrink:0}
     .footer-bar a{color:var(--text-muted);text-decoration:none;font-weight:500}
     .footer-bar a:hover{color:var(--green)}
@@ -218,6 +233,7 @@
   <div class="header-right">
     <div class="status-badge">API Live</div>
     <button class="new-chat-btn" onclick="openModal()">＋ New</button>
+    <button class="new-chat-btn" style="background:var(--surface2);color:var(--green);border:1px solid var(--green-dim)" onclick="openBroadcast()">📢 Broadcast</button>
     <button class="header-btn" id="notifToggleBtn" onclick="toggleNotifications()" title="Notifications">🔔</button>
     <button class="header-btn" onclick="doLogout()">Sign out</button>
   </div>
@@ -247,7 +263,107 @@
   </div>
 </div>
 
-<div class="footer-bar">Developed by <a href="https://lynxtech.org" target="_blank" rel="noopener noreferrer">Lynx Tech</a></div>
+<!-- BROADCAST MODAL -->
+<div class="modal-overlay" id="broadcastOverlay" onclick="closeBroadcastOutside(event)">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <div class="modal-title">📢 Broadcast Message</div>
+      <button class="modal-close" onclick="closeBroadcast()">✕</button>
+    </div>
+
+    <!-- STEP 1: Upload CSV -->
+    <div class="bc-step active" id="bc-step1">
+      <div class="modal-note">
+        Export your contacts from <strong>Google Contacts → Export → Google CSV</strong>. Upload it here — the tool handles all number formats automatically.
+      </div>
+      <div class="form-group">
+        <div class="form-label">Default Country Code</div>
+        <select class="form-input" id="bc-countryCode" style="cursor:pointer">
+          <option value="92">🇵🇰 Pakistan (+92)</option>
+          <option value="1">🇺🇸 USA/Canada (+1)</option>
+          <option value="44">🇬🇧 UK (+44)</option>
+          <option value="971">🇦🇪 UAE (+971)</option>
+          <option value="966">🇸🇦 Saudi Arabia (+966)</option>
+          <option value="61">🇦🇺 Australia (+61)</option>
+          <option value="49">🇩🇪 Germany (+49)</option>
+        </select>
+        <div class="form-hint">Used to complete local numbers starting with 0 (e.g. 0300... → 92300...)</div>
+      </div>
+      <div class="form-group">
+        <div class="form-label">Upload CSV File</div>
+        <input class="form-input" type="file" id="bc-csvFile" accept=".csv" onchange="onCSVUpload()" style="padding:8px"/>
+      </div>
+    </div>
+
+    <!-- STEP 2: Map columns -->
+    <div class="bc-step" id="bc-step2">
+      <div class="modal-note">
+        <strong id="bc-csvSummary"></strong><br/>
+        Select which columns contain the Name and Phone Number. If your template has variables like {{1}}, map them too.
+      </div>
+      <div class="form-group" style="margin-top:4px">
+        <div class="form-label">Preview (first 3 rows)</div>
+        <div style="overflow-x:auto"><table class="bc-table" id="bc-previewTable"></table></div>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px">
+        <div class="form-group" style="flex:1;min-width:120px">
+          <div class="form-label">Name Column</div>
+          <select class="form-input" id="bc-nameCol" style="cursor:pointer"></select>
+        </div>
+        <div class="form-group" style="flex:1;min-width:120px">
+          <div class="form-label">Phone Column</div>
+          <select class="form-input" id="bc-phoneCol" style="cursor:pointer"></select>
+        </div>
+      </div>
+      <div id="bc-varMappings"></div>
+      <div class="modal-actions" style="margin-top:8px">
+        <button class="btn-cancel" onclick="bcGoStep(1)">← Back</button>
+        <button class="btn-send" onclick="bcGoStep(3)">Next →</button>
+      </div>
+    </div>
+
+    <!-- STEP 3: Select template + preview -->
+    <div class="bc-step" id="bc-step3">
+      <div class="form-group">
+        <div class="form-label">Select Template</div>
+        <select class="form-input" id="bc-template" style="cursor:pointer" onchange="onBcTemplateSelect()">
+          <option value="">Loading templates...</option>
+        </select>
+      </div>
+      <div id="bc-templatePreviewWrap" style="display:none">
+        <div class="form-label" style="margin-bottom:6px">Message Preview (first contact)</div>
+        <div class="template-preview" id="bc-templatePreview"></div>
+      </div>
+      <div class="form-group" style="margin-top:8px">
+        <div class="form-label">Ready to send</div>
+        <div id="bc-readySummary" style="font-size:13px;color:var(--text-muted);line-height:1.6"></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-cancel" onclick="bcGoStep(2)">← Back</button>
+        <button class="btn-send" id="bc-sendBtn" onclick="startBroadcast()">Send to All</button>
+      </div>
+    </div>
+
+    <!-- STEP 4: Progress -->
+    <div class="bc-step" id="bc-step4">
+      <div class="form-label" style="margin-bottom:8px">Sending in progress...</div>
+      <div class="progress-bar-wrap"><div class="progress-bar-fill" id="bc-progressFill" style="width:0%"></div></div>
+      <div id="bc-progressLabel" style="font-size:12px;color:var(--text-muted);margin-bottom:8px">0 / 0</div>
+      <div class="bc-stats">
+        <div class="bc-stat"><div class="bc-stat-val" id="bc-sentCount" style="color:var(--green)">0</div><div class="bc-stat-label">Sent</div></div>
+        <div class="bc-stat"><div class="bc-stat-val" id="bc-failCount" style="color:#e05c5c">0</div><div class="bc-stat-label">Failed</div></div>
+        <div class="bc-stat"><div class="bc-stat-val" id="bc-skipCount" style="color:var(--text-muted)">0</div><div class="bc-stat-label">Skipped</div></div>
+      </div>
+      <div class="bc-errors" id="bc-errorList"></div>
+      <div class="modal-actions" style="margin-top:8px">
+        <button class="btn-cancel" id="bc-cancelBtn" onclick="cancelBroadcast()">Cancel</button>
+        <button class="btn-send" id="bc-doneBtn" style="display:none" onclick="closeBroadcast()">Done ✓</button>
+      </div>
+    </div>
+
+  </div>
+</div>
 
 <!-- LIGHTBOX -->
 <div class="lightbox" id="lightbox" onclick="closeLightbox()">
@@ -273,7 +389,7 @@
   <button class="msg-action-btn danger" id="actDelete" onclick="doDelete()">🗑️ Delete</button>
 </div>
 
-<!-- NEW CONVERSATION MODAL -->
+<div class="footer-bar">Developed by <a href="https://lynxtech.org" target="_blank" rel="noopener noreferrer">Lynx Tech</a></div>
 <div class="modal-overlay" id="modalOverlay" onclick="closeModalOutside(event)">
   <div class="modal">
     <div class="modal-handle"></div>
@@ -995,6 +1111,245 @@ function autoResize(el) { el.style.height="auto"; el.style.height=Math.min(el.sc
 function formatTime(ts) { if (!ts) return ""; return new Date(ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); }
 function escHtml(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function showToast(msg,type="") { const t=document.getElementById("toast"); t.textContent=msg; t.className=`toast show ${type}`; setTimeout(()=>t.className="toast",4000); }
+
+// ══════════════════════════════
+// BROADCAST
+// ══════════════════════════════
+let bcCSVRows    = [];   // all parsed rows
+let bcHeaders    = [];   // column headers
+let bcContacts   = [];   // normalised contacts ready to send
+let bcTemplates  = [];
+let bcJobId      = null;
+let bcPollTimer  = null;
+
+function openBroadcast() {
+  document.getElementById("broadcastOverlay").classList.add("open");
+  bcGoStep(1);
+  // Load templates in background
+  fetch("/api/templates", { headers: authH() })
+    .then(r => r.json())
+    .then(d => {
+      bcTemplates = d.templates || [];
+      const sel = document.getElementById("bc-template");
+      if (bcTemplates.length) {
+        sel.innerHTML = '<option value="">— Select a template —</option>' +
+          bcTemplates.map(t => `<option value="${t.name}">${t.name} (${t.language})</option>`).join("");
+      } else {
+        sel.innerHTML = '<option value="">No approved templates found</option>';
+      }
+    }).catch(() => {});
+}
+
+function closeBroadcast() {
+  document.getElementById("broadcastOverlay").classList.remove("open");
+  if (bcPollTimer) clearInterval(bcPollTimer);
+}
+function closeBroadcastOutside(e) { if (e.target === document.getElementById("broadcastOverlay")) closeBroadcast(); }
+
+function bcGoStep(n) {
+  document.querySelectorAll(".bc-step").forEach((el, i) => {
+    el.classList.toggle("active", i + 1 === n);
+  });
+}
+
+// ── CSV UPLOAD ──
+function onCSVUpload() {
+  const file = document.getElementById("bc-csvFile").files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const text = e.target.result;
+    const rows = parseCSV(text);
+    if (rows.length < 2) { showToast("CSV seems empty or invalid", "error"); return; }
+    bcHeaders = rows[0];
+    bcCSVRows = rows.slice(1).filter(r => r.some(c => c.trim()));
+    document.getElementById("bc-csvSummary").textContent =
+      `${bcCSVRows.length} contacts found, ${bcHeaders.length} columns`;
+    buildColumnSelectors();
+    buildPreviewTable();
+    bcGoStep(2);
+  };
+  reader.readAsText(file);
+}
+
+function parseCSV(text) {
+  const rows = [];
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const cols = [];
+    let cur = "", inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') { inQ = !inQ; }
+      else if (c === "," && !inQ) { cols.push(cur.trim()); cur = ""; }
+      else cur += c;
+    }
+    cols.push(cur.trim());
+    rows.push(cols);
+  }
+  return rows;
+}
+
+function buildColumnSelectors() {
+  const options = bcHeaders.map((h, i) => `<option value="${i}">${h || "Column " + (i+1)}</option>`).join("");
+  document.getElementById("bc-nameCol").innerHTML  = options;
+  document.getElementById("bc-phoneCol").innerHTML = options;
+
+  // Auto-detect name and phone columns
+  const nameIdx  = bcHeaders.findIndex(h => /name/i.test(h));
+  const phoneIdx = bcHeaders.findIndex(h => /phone|mobile|number|tel/i.test(h));
+  if (nameIdx  >= 0) document.getElementById("bc-nameCol").value  = nameIdx;
+  if (phoneIdx >= 0) document.getElementById("bc-phoneCol").value = phoneIdx;
+}
+
+function buildPreviewTable() {
+  const preview = bcCSVRows.slice(0, 3);
+  const thead = `<thead><tr>${bcHeaders.map(h => `<th>${escHtml(h||"")}</th>`).join("")}</tr></thead>`;
+  const tbody = `<tbody>${preview.map(r =>
+    `<tr>${bcHeaders.map((_, i) => `<td>${escHtml(r[i]||"")}</td>`).join("")}</tr>`
+  ).join("")}</tbody>`;
+  document.getElementById("bc-previewTable").innerHTML = thead + tbody;
+}
+
+// ── TEMPLATE SELECT IN BROADCAST ──
+function onBcTemplateSelect() {
+  const name = document.getElementById("bc-template").value;
+  const tpl  = bcTemplates.find(t => t.name === name);
+  const wrap = document.getElementById("bc-templatePreviewWrap");
+  const varDiv = document.getElementById("bc-varMappings");
+
+  if (!tpl) { wrap.style.display = "none"; return; }
+
+  // Build variable mapping dropdowns (in step 2 area)
+  if (tpl.varCount > 0) {
+    const colOptions = bcHeaders.map((h,i) => `<option value="${i}">${h||"Column "+(i+1)}</option>`).join("");
+    varDiv.innerHTML = Array.from({length: tpl.varCount}, (_, i) => `
+      <div class="form-group" style="flex:1;min-width:120px;margin-top:8px">
+        <div class="form-label">{{${i+1}}} mapped to column</div>
+        <select class="form-input" id="bc-var-${i}" style="cursor:pointer">${colOptions}</select>
+      </div>`).join("");
+  } else {
+    varDiv.innerHTML = "";
+  }
+
+  // Preview with first contact's data
+  updateBcPreview(tpl);
+  wrap.style.display = "";
+  updateReadySummary();
+}
+
+function updateBcPreview(tpl) {
+  if (!tpl || !bcCSVRows.length) return;
+  const nameCol  = parseInt(document.getElementById("bc-nameCol")?.value || 0);
+  const phoneCol = parseInt(document.getElementById("bc-phoneCol")?.value || 1);
+  const firstRow = bcCSVRows[0];
+  let preview = tpl.body;
+  for (let i = 0; i < tpl.varCount; i++) {
+    const colSel = document.getElementById("bc-var-" + i);
+    const val    = colSel ? (firstRow[parseInt(colSel.value)] || `{{${i+1}}}`) : `{{${i+1}}}`;
+    preview = preview.replace(new RegExp(`\\{\\{${i+1}\\}\\}`, "g"), val);
+  }
+  document.getElementById("bc-templatePreview").textContent =
+    `To: ${firstRow[nameCol] || "?"} (+${firstRow[phoneCol] || "?"})\n\n${preview}`;
+}
+
+function updateReadySummary() {
+  const tpl = bcTemplates.find(t => t.name === document.getElementById("bc-template").value);
+  document.getElementById("bc-readySummary").innerHTML =
+    `<strong style="color:var(--text)">${bcCSVRows.length}</strong> contacts from CSV<br/>
+     Template: <strong style="color:var(--green)">${tpl?.name || "—"}</strong><br/>
+     Estimated time: <strong style="color:var(--text)">~${Math.ceil(bcCSVRows.length / 60)} min</strong> (1 msg/sec)`;
+}
+
+// ── SEND BROADCAST ──
+async function startBroadcast() {
+  const tpl      = bcTemplates.find(t => t.name === document.getElementById("bc-template").value);
+  const nameCol  = parseInt(document.getElementById("bc-nameCol").value);
+  const phoneCol = parseInt(document.getElementById("bc-phoneCol").value);
+  const countryCode = document.getElementById("bc-countryCode").value;
+
+  if (!tpl) { showToast("Select a template", "error"); return; }
+
+  // Build contacts array
+  const contacts = bcCSVRows.map(row => {
+    const variables = [];
+    for (let i = 0; i < tpl.varCount; i++) {
+      const colSel = document.getElementById("bc-var-" + i);
+      variables.push(colSel ? (row[parseInt(colSel.value)] || "") : "");
+    }
+    // Build preview text with variables
+    let previewText = tpl.body;
+    variables.forEach((v, i) => {
+      previewText = previewText.replace(new RegExp(`\\{\\{${i+1}\\}\\}`, "g"), v || `{{${i+1}}}`);
+    });
+    return {
+      name: row[nameCol] || "",
+      phone: row[phoneCol] || "",
+      variables,
+      previewText
+    };
+  });
+
+  bcGoStep(4);
+  document.getElementById("bc-progressLabel").textContent = `0 / ${contacts.length}`;
+
+  try {
+    const r = await fetch("/api/broadcast", {
+      method: "POST",
+      headers: authH({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        contacts,
+        template_name:    tpl.name,
+        language_code:    tpl.language,
+        default_country_code: countryCode
+      })
+    });
+    const d = await r.json();
+    if (!d.success) { showToast("Failed to start: " + (d.error||""), "error"); return; }
+    bcJobId = d.jobId;
+    bcPollTimer = setInterval(pollBroadcast, 2000);
+  } catch(e) {
+    showToast("Network error", "error");
+  }
+}
+
+async function pollBroadcast() {
+  if (!bcJobId) return;
+  try {
+    const r = await fetch(`/api/broadcast/${bcJobId}`, { headers: authH() });
+    const job = await r.json();
+
+    const total = job.total || 1;
+    const done  = job.sent + job.failed + job.skipped;
+    const pct   = Math.round((done / total) * 100);
+
+    document.getElementById("bc-progressFill").style.width = pct + "%";
+    document.getElementById("bc-progressLabel").textContent = `${done} / ${total} (${pct}%)`;
+    document.getElementById("bc-sentCount").textContent  = job.sent;
+    document.getElementById("bc-failCount").textContent  = job.failed;
+    document.getElementById("bc-skipCount").textContent  = job.skipped;
+
+    if (job.errors?.length) {
+      document.getElementById("bc-errorList").innerHTML =
+        job.errors.slice(-10).map(e => `⚠️ ${escHtml(e.name||e.phone)}: ${escHtml(e.reason)}`).join("<br/>");
+    }
+
+    if (job.status === "done" || job.status === "cancelled") {
+      clearInterval(bcPollTimer);
+      document.getElementById("bc-progressLabel").textContent =
+        job.status === "done" ? `✅ Complete — ${job.sent} sent` : "❌ Cancelled";
+      document.getElementById("bc-cancelBtn").style.display = "none";
+      document.getElementById("bc-doneBtn").style.display   = "";
+    }
+  } catch(e) {}
+}
+
+async function cancelBroadcast() {
+  if (!bcJobId) return;
+  await fetch(`/api/broadcast/${bcJobId}`, { method: "DELETE", headers: authH() });
+  clearInterval(bcPollTimer);
+}
 
 // ── INIT ──
 if (!getToken()) { window.location.href="/"; }
