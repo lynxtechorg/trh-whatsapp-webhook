@@ -79,6 +79,20 @@
     .tag-btn{background:transparent;border:1px solid var(--border);color:var(--text-muted);font-size:11px;padding:4px 8px;border-radius:6px;cursor:pointer;font-family:'DM Sans',sans-serif;white-space:nowrap}
     .tag-btn:active{border-color:var(--green-dim);color:var(--green)}
 
+    /* MULTI SELECT */
+    .msg-checkbox{width:18px;height:18px;accent-color:var(--green);cursor:pointer;flex-shrink:0;margin-right:6px;display:none}
+    .select-mode .msg-checkbox{display:block}
+    .select-mode .message-bubble{cursor:pointer}
+    .select-bar{background:var(--surface);border-top:1px solid var(--border);padding:10px 14px;display:none;align-items:center;justify-content:space-between;gap:10px;flex-shrink:0}
+    .select-bar.open{display:flex}
+    .select-bar-info{font-size:13px;color:var(--text-muted)}
+    .select-bar-actions{display:flex;gap:8px}
+    .sel-btn{border:none;border-radius:8px;padding:7px 14px;font-size:13px;cursor:pointer;font-family:'DM Sans',sans-serif;font-weight:500}
+
+    /* REACTIONS */
+    .reactions-row{display:flex;gap:3px;flex-wrap:wrap;margin-top:4px}
+    .reaction-chip{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:2px 7px;font-size:13px;cursor:default}
+
     /* MESSAGES */
     .messages-area{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px;display:flex;flex-direction:column;gap:8px}
     .message-bubble{max-width:78%;padding:9px 13px;border-radius:14px;font-size:14px;line-height:1.5;word-break:break-word}
@@ -275,20 +289,7 @@
     <!-- STEP 1: Upload CSV -->
     <div class="bc-step active" id="bc-step1">
       <div class="modal-note">
-        Export your contacts from <strong>Google Contacts → Export → Google CSV</strong>. Upload it here — the tool handles all number formats automatically.
-      </div>
-      <div class="form-group">
-        <div class="form-label">Default Country Code</div>
-        <select class="form-input" id="bc-countryCode" style="cursor:pointer">
-          <option value="92">🇵🇰 Pakistan (+92)</option>
-          <option value="1">🇺🇸 USA/Canada (+1)</option>
-          <option value="44">🇬🇧 UK (+44)</option>
-          <option value="971">🇦🇪 UAE (+971)</option>
-          <option value="966">🇸🇦 Saudi Arabia (+966)</option>
-          <option value="61">🇦🇺 Australia (+61)</option>
-          <option value="49">🇩🇪 Germany (+49)</option>
-        </select>
-        <div class="form-hint">Used to complete local numbers starting with 0 (e.g. 0300... → 92300...)</div>
+        Export from <strong>Google Contacts → Export → Google CSV</strong>. Numbers must be in full international format without + sign — e.g. <strong>923001234567</strong>. The tool will strip spaces, dashes and + automatically.
       </div>
       <div class="form-group">
         <div class="form-label">Upload CSV File</div>
@@ -709,6 +710,15 @@ async function openConversation(phone, name) {
       <div class="chat-avatar">${name.charAt(0).toUpperCase()}</div>
       <div class="chat-info"><div class="chat-name">${escHtml(name)}</div><div class="chat-phone">+${phone}</div></div>
       <button class="tag-btn" onclick="openTagsPanel('${phone}')">🏷️ Tags</button>
+      <button class="tag-btn" onclick="toggleSelectMode()" id="selectModeBtn">☑️</button>
+      <button class="tag-btn" style="color:#e05c5c;border-color:#e05c5c30" onclick="confirmDeleteChat('${phone}')">🗑️</button>
+    </div>
+    <div class="select-bar" id="selectBar">
+      <span class="select-bar-info" id="selectCount">0 selected</span>
+      <div class="select-bar-actions">
+        <button class="sel-btn" style="background:var(--surface2);color:var(--text-muted)" onclick="toggleSelectMode()">Cancel</button>
+        <button class="sel-btn" style="background:#e05c5c20;color:#e05c5c" onclick="deleteSelected()">Delete Selected</button>
+      </div>
     </div>
     <div style="position:relative;flex:1;display:flex;flex-direction:column;overflow:hidden">
       <div class="messages-area" id="messagesArea"></div>
@@ -1042,13 +1052,29 @@ function renderMessage(m) {
   const sentBy  = (m.direction==="outgoing" && m.sentBy) ? ` · ${escHtml(m.sentBy)}` : "";
   const edited  = m.edited ? `<span style="color:var(--text-dim);font-size:10px"> · Edited</span>` : "";
 
-  return `<div class="message-bubble ${m.direction}"
-    oncontextmenu="showMsgActions(event,'${m.id}')"
-    ontouchstart="startLongPress(event,'${m.id}')"
-    ontouchend="clearLongPress()"
-    ontouchmove="clearLongPress()">
-    ${content}
-    <div class="message-meta">${formatTime(m.timestamp)}${sentBy}${edited}${tick}</div>
+  // Reactions
+  let reactionsHtml = "";
+  if (m.reactions && Object.keys(m.reactions).length) {
+    const counts = {};
+    Object.values(m.reactions).forEach(e => { counts[e] = (counts[e]||0)+1; });
+    reactionsHtml = `<div class="reactions-row">${
+      Object.entries(counts).map(([e,c]) =>
+        `<span class="reaction-chip" title="${Object.entries(m.reactions).filter(([,v])=>v===e).map(([k])=>k).join(", ")}">${e}${c>1?` ${c}`:""}</span>`
+      ).join("")
+    }</div>`;
+  }
+
+  return `<div style="display:flex;align-items:flex-end;gap:4px;${m.direction==='outgoing'?'justify-content:flex-end':''}">
+    <input type="checkbox" class="msg-checkbox" data-id="${m.id}" onchange="onMsgCheck(this)"/>
+    <div class="message-bubble ${m.direction}"
+      oncontextmenu="showMsgActions(event,'${m.id}')"
+      ontouchstart="startLongPress(event,'${m.id}')"
+      ontouchend="clearLongPress()"
+      ontouchmove="clearLongPress()">
+      ${content}
+      ${reactionsHtml}
+      <div class="message-meta">${formatTime(m.timestamp)}${sentBy}${edited}${tick}</div>
+    </div>
   </div>`;
 }
 
@@ -1111,6 +1137,46 @@ function autoResize(el) { el.style.height="auto"; el.style.height=Math.min(el.sc
 function formatTime(ts) { if (!ts) return ""; return new Date(ts).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}); }
 function escHtml(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function showToast(msg,type="") { const t=document.getElementById("toast"); t.textContent=msg; t.className=`toast show ${type}`; setTimeout(()=>t.className="toast",4000); }
+
+// ── MULTI-SELECT ──
+let selectMode = false;
+function toggleSelectMode() {
+  selectMode = !selectMode;
+  const area = document.getElementById("messagesArea");
+  const bar  = document.getElementById("selectBar");
+  const btn  = document.getElementById("selectModeBtn");
+  if (!area) return;
+  area.classList.toggle("select-mode", selectMode);
+  bar?.classList.toggle("open", selectMode);
+  if (btn) btn.style.background = selectMode ? "var(--green-glow)" : "";
+  if (!selectMode) { document.querySelectorAll(".msg-checkbox").forEach(c=>c.checked=false); updateSelectCount(); }
+}
+function onMsgCheck() { updateSelectCount(); }
+function updateSelectCount() {
+  const n = document.querySelectorAll(".msg-checkbox:checked").length;
+  const el = document.getElementById("selectCount");
+  if (el) el.textContent = `${n} selected`;
+}
+async function deleteSelected() {
+  const checked = [...document.querySelectorAll(".msg-checkbox:checked")];
+  if (!checked.length) { showToast("No messages selected","error"); return; }
+  if (!confirm(`Delete ${checked.length} message(s)?`)) return;
+  const ids = checked.map(c=>c.dataset.id);
+  try {
+    const r = await fetch(`/api/conversations/${activePhone}/messages/bulk-delete`,{method:"POST",headers:authH({"Content-Type":"application/json"}),body:JSON.stringify({messageIds:ids})});
+    if (r.ok) { showToast(`${ids.length} deleted`,""); toggleSelectMode(); await refreshMessages(); }
+    else showToast("Failed","error");
+  } catch(e) { showToast("Network error","error"); }
+}
+async function confirmDeleteChat(phone) {
+  const name = allConversations.find(c=>c.phone===phone)?.name||phone;
+  if (!confirm(`Delete entire conversation with ${name}?\n\nThis cannot be undone.`)) return;
+  try {
+    const r = await fetch(`/api/conversations/${phone}`,{method:"DELETE",headers:authH()});
+    if (r.ok) { showToast("Chat deleted",""); goBack(); await loadConversations(); }
+    else showToast("Failed","error");
+  } catch(e) { showToast("Network error","error"); }
+}
 
 // ══════════════════════════════
 // BROADCAST
@@ -1267,7 +1333,6 @@ async function startBroadcast() {
   const tpl      = bcTemplates.find(t => t.name === document.getElementById("bc-template").value);
   const nameCol  = parseInt(document.getElementById("bc-nameCol").value);
   const phoneCol = parseInt(document.getElementById("bc-phoneCol").value);
-  const countryCode = document.getElementById("bc-countryCode").value;
 
   if (!tpl) { showToast("Select a template", "error"); return; }
 
@@ -1301,8 +1366,7 @@ async function startBroadcast() {
       body: JSON.stringify({
         contacts,
         template_name:    tpl.name,
-        language_code:    tpl.language,
-        default_country_code: countryCode
+        language_code:    tpl.language
       })
     });
     const d = await r.json();

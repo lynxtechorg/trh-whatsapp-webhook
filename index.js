@@ -13,7 +13,7 @@ const WHATSAPP_TOKEN  = process.env.WHATSAPP_TOKEN  || "";
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID || "";
 const VAPID_PUBLIC    = process.env.VAPID_PUBLIC_KEY  || "";
 const VAPID_PRIVATE   = process.env.VAPID_PRIVATE_KEY || "";
-const VAPID_EMAIL     = process.env.VAPID_EMAIL       || "mailto:fahad.qadri@caravanoflifetrust.org";
+const VAPID_EMAIL     = process.env.VAPID_EMAIL       || "mailto:admin@caravanoflifetrust.org";
 
 // Setup web-push VAPID if keys are configured
 if (VAPID_PUBLIC && VAPID_PRIVATE) {
@@ -51,11 +51,20 @@ async function sendPushToAll(title, body, phone) {
 }
 
 // ─── REDIS HELPERS ───
+
+// Normalise phone: strip +, spaces, dashes
+function normalisePhone(raw) {
+  if (!raw) return null;
+  return String(raw).replace(/[\s\-\(\)\+\.]/g, "");
+}
+
 async function getConversation(phone) {
-  return (await redis.get(`convo:${phone}`)) || null;
+  const p = normalisePhone(phone) || phone;
+  return (await redis.get(`convo:${p}`)) || null;
 }
 async function saveConversation(phone, data) {
-  await redis.set(`convo:${phone}`, data);
+  const p = normalisePhone(phone) || phone;
+  await redis.set(`convo:${p}`, data);
 }
 async function getAllConversations() {
   const keys = await redis.keys("convo:*");
@@ -64,15 +73,50 @@ async function getAllConversations() {
   return convos.filter(Boolean);
 }
 async function pushMessage(phone, name, message) {
-  let convo = await getConversation(phone);
-  if (!convo) convo = { phone, name, messages: [], tags: [], note: "" };
-  convo.name = name;
+  const p = normalisePhone(phone) || phone;
+  let convo = await getConversation(p);
+  if (!convo) convo = { phone: p, name, messages: [], tags: [], note: "" };
+  // Update name only if incoming (customer's real WA name takes priority)
+  if (name && name !== p) convo.name = name;
   convo.messages.push(message);
-  await saveConversation(phone, convo);
+  await saveConversation(p, convo);
   return convo;
 }
 
+// ── MEDIA CACHE — store fetched buffers in Redis to avoid Meta URL expiry ──
+async function getCachedMedia(mediaId) {
+  try {
+    const cached = await redis.get(`media:${mediaId}`);
+    return cached || null; // base64 string
+  } catch { return null; }
+}
+async function setCachedMedia(mediaId, base64Data) {
+  try {
+    // Cache for 7 days
+    await redis.set(`media:${mediaId}`, base64Data, { ex: 7 * 24 * 60 * 60 });
+  } catch {}
+}
+
+// ── REACTION HELPER — attach reaction to original message ──
+async function handleReaction(phone, reactionData) {
+  const p = normalisePhone(phone) || phone;
+  const convo = await getConversation(p);
+  if (!convo) return;
+  const { message_id, emoji, react_by } = reactionData;
+  const msg = convo.messages?.find(m => m.id === message_id);
+  if (msg) {
+    if (!msg.reactions) msg.reactions = {};
+    if (emoji) {
+      msg.reactions[react_by || "?"] = emoji;
+    } else {
+      delete msg.reactions[react_by || "?"]; // empty emoji = unreaction
+    }
+    await saveConversation(p, convo);
+  }
+}
+
 // Update message status with timestamp
+
 async function updateMessageStatus(msgId, status) {
   const keys = await redis.keys("convo:*");
   for (const key of keys) {
@@ -181,9 +225,18 @@ app.post("/webhook", async (req, res) => {
       for (const change of entry.changes || []) {
         const value = change.value;
 
-        // ── Incoming messages ──
+        // ── Reactions ──
         if (value.messages) {
           for (const msg of value.messages) {
+            if (msg.type === "reaction") {
+              await handleReaction(msg.from, {
+                message_id: msg.reaction?.message_id,
+                emoji:      msg.reaction?.emoji,
+                react_by:   value.contacts?.[0]?.profile?.name || msg.from
+              });
+              console.log(`😄 Reaction from ${msg.from}: ${msg.reaction?.emoji}`);
+              continue;
+            }
             const from = msg.from;
             const name = value.contacts?.[0]?.profile?.name || from;
             let text, mediaId, mediaType, fileName, mimeType;
@@ -255,12 +308,32 @@ app.post("/webhook", async (req, res) => {
             await pushMessage(from, name, msgObj);
             console.log(`📩 ${name} (${from}): ${text}`);
 
-            // Fire push notification to all logged-in staff
-            await sendPushToAll(
-              `New message from ${name}`,
-              text.substring(0, 100),
-              from
-            );
+            // Proactively cache media files so they don't expire
+            if (mediaId) {
+              setImmediate(async () => {
+                try {
+                  const cached = await getCachedMedia(mediaId);
+                  if (!cached) {
+                    const metaRes = await fetch(`https://graph.facebook.com/v19.0/${mediaId}`, {
+                      headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
+                    });
+                    const metaData = await metaRes.json();
+                    if (metaData.url) {
+                      const fileRes = await fetch(metaData.url, {
+                        headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
+                      });
+                      const buf = Buffer.from(await fileRes.arrayBuffer());
+                      const cacheObj = { data: buf.toString("base64"), type: mimeType || "application/octet-stream" };
+                      await setCachedMedia(mediaId, JSON.stringify(cacheObj));
+                      console.log(`💾 Cached media ${mediaId}`);
+                    }
+                  }
+                } catch(e) { console.log(`Cache failed for ${mediaId}:`, e.message); }
+              });
+            }
+
+            // Fire push notification
+            await sendPushToAll(`New message from ${name}`, text.substring(0, 100), from);
           }
         }
 
@@ -277,7 +350,7 @@ app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
 });
 
-// ─── MEDIA PROXY — supports range requests for proper audio/video streaming ───
+// ─── MEDIA PROXY — cached in Redis to survive Meta URL expiry ───
 app.get("/api/media/:mediaId", async (req, res) => {
   const token = req.query.token ||
     (req.headers["authorization"] || "").replace("Bearer ", "").trim();
@@ -286,52 +359,70 @@ app.get("/api/media/:mediaId", async (req, res) => {
     return res.status(401).json({ error: "Unauthorized" });
   }
 
+  const mediaId = req.params.mediaId;
+
   try {
-    // Step 1: get download URL from Meta
-    const metaRes = await fetch(`https://graph.facebook.com/v19.0/${req.params.mediaId}`, {
-      headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
-    });
-    const metaData = await metaRes.json();
-    if (!metaData.url) return res.status(404).json({ error: "Media not found" });
+    // Try Redis cache first
+    let base64Data = await getCachedMedia(mediaId);
+    let contentType = "application/octet-stream";
 
-    // Step 2: fetch full file
-    const fileRes = await fetch(metaData.url, {
-      headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
-    });
+    if (!base64Data) {
+      // Fetch from Meta
+      const metaRes = await fetch(`https://graph.facebook.com/v19.0/${mediaId}`, {
+        headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
+      });
+      const metaData = await metaRes.json();
+      if (!metaData.url) return res.status(404).json({ error: "Media not found" });
 
-    const buffer = Buffer.from(await fileRes.arrayBuffer());
-    const contentType = metaData.mime_type || "application/octet-stream";
-    const totalSize = buffer.length;
+      contentType = metaData.mime_type || "application/octet-stream";
+      const fileRes = await fetch(metaData.url, {
+        headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` }
+      });
+      const buffer = Buffer.from(await fileRes.arrayBuffer());
+
+      // Cache as JSON with type info
+      const cacheObj = { data: buffer.toString("base64"), type: contentType };
+      await setCachedMedia(mediaId, JSON.stringify(cacheObj));
+      base64Data = JSON.stringify(cacheObj);
+    }
+
+    // Parse cached data
+    let buffer, type;
+    try {
+      const parsed = JSON.parse(base64Data);
+      buffer = Buffer.from(parsed.data, "base64");
+      type   = parsed.type || contentType;
+    } catch {
+      buffer = Buffer.from(base64Data, "base64");
+      type   = contentType;
+    }
 
     if (req.query.filename) {
       res.setHeader("Content-Disposition", `attachment; filename="${req.query.filename}"`);
-      res.setHeader("Content-Type", contentType);
-      res.setHeader("Content-Length", totalSize);
-      return res.send(buffer);
     }
 
-    // Handle range requests (critical for audio/video seeking)
+    // Range request support for audio/video seeking
     const rangeHeader = req.headers.range;
     if (rangeHeader) {
       const parts  = rangeHeader.replace(/bytes=/, "").split("-");
       const start  = parseInt(parts[0], 10);
-      const end    = parts[1] ? parseInt(parts[1], 10) : totalSize - 1;
+      const end    = parts[1] ? parseInt(parts[1], 10) : buffer.length - 1;
       const chunk  = end - start + 1;
-
       res.writeHead(206, {
-        "Content-Range":  `bytes ${start}-${end}/${totalSize}`,
+        "Content-Range":  `bytes ${start}-${end}/${buffer.length}`,
         "Accept-Ranges":  "bytes",
         "Content-Length": chunk,
-        "Content-Type":   contentType,
+        "Content-Type":   type,
       });
       return res.end(buffer.slice(start, end + 1));
     }
 
-    res.setHeader("Content-Type", contentType);
-    res.setHeader("Content-Length", totalSize);
+    res.setHeader("Content-Type", type);
+    res.setHeader("Content-Length", buffer.length);
     res.setHeader("Accept-Ranges", "bytes");
     res.send(buffer);
   } catch (err) {
+    console.error("Media proxy error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -365,6 +456,31 @@ app.post("/api/conversations/:phone/meta", requireAuth, async (req, res) => {
   if (tags !== undefined) convo.tags = tags;
   if (note !== undefined) convo.note = note;
   await saveConversation(req.params.phone, convo);
+  res.json({ success: true });
+});
+
+// ─── DELETE MULTIPLE MESSAGES ───
+app.post("/api/conversations/:phone/messages/bulk-delete", requireAuth, async (req, res) => {
+  const { messageIds } = req.body;
+  if (!messageIds?.length) return res.status(400).json({ error: "No message IDs provided" });
+  const convo = await getConversation(req.params.phone);
+  if (!convo) return res.status(404).json({ error: "Not found" });
+  convo.messages.forEach(m => {
+    if (messageIds.includes(m.id)) {
+      m.deleted = true;
+      m.text = "🚫 Message deleted";
+      delete m.mediaId; delete m.mediaType; delete m.contactData;
+    }
+  });
+  await saveConversation(req.params.phone, convo);
+  res.json({ success: true, deleted: messageIds.length });
+});
+
+// ─── DELETE WHOLE CHAT ───
+app.delete("/api/conversations/:phone", requireAuth, async (req, res) => {
+  const p = normalisePhone(req.params.phone) || req.params.phone;
+  await redis.del(`convo:${p}`);
+  console.log(`🗑️ [${req.user}] Deleted chat: ${p}`);
   res.json({ success: true });
 });
 
